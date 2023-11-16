@@ -1,0 +1,24 @@
+- name: Updating repositories
+  apt:
+    update_cache: yes
+
+- name: Installing dependencies
+  apt:
+    name: "{{ item }}"
+    state: present
+    install_recommends: yes
+  loop:
+  - apt-utils
+  - autoconf 
+  - automake 
+  - build-essential 
+  - git 
+  - libcurl4-openssl-dev 
+  - libgeoip-dev 
+  - liblmdb-dev 
+  - libpcre++-dev 
+  - libtool 
+  - libxml2-dev
+  - libyajl-dev 
+  - pkgconf 
+  - zlib1g-dev

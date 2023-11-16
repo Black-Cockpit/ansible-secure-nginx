@@ -1,0 +1,18 @@
+galaxy_info:
+  author: Hasni Mehdi
+  description: Nginx ModSecurity web application firewall installer
+  company: Black Cockpit
+  license: MIT
+  min_ansible_version: 2.1
+
+  platforms:
+  - name: Ubuntu
+    versions:
+    - all
+
+  galaxy_tags:
+  - nginx_security
+  - web_application_firewall
+  - mod_security
+  - nginx_mod_security
+dependencies: []

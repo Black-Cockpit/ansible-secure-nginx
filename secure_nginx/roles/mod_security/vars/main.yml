@@ -1,0 +1,3 @@
+build_dir: "/tmp"
+module_version: "3.0.10"
+detection_only: false

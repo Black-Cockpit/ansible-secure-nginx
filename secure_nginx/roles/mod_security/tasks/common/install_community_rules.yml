@@ -1,0 +1,38 @@
+- name: Creating rule directory /etc/nginx/waf_rules
+  file:
+    path: "/etc/nginx/waf_rules"
+    state: directory
+    recurse: yes
+
+- name: Downloading community rules
+  get_url:
+    url: "https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/modsecurity.conf-recommended"
+    dest: "/etc/nginx/waf_rules/modsecurity.conf"
+    mode: "644"
+
+- name: Copying ModeSecurity unicode mapping
+  copy:
+    src: "{{ source_dir }}/modsecurity-v{{ module_version }}/unicode.mapping"
+    dest: "/etc/nginx/waf_rules/"
+    remote_src: yes
+    mode: "644"
+
+- name: Updating ModeSecurity configuration
+  lineinfile:
+    path: "/etc/nginx/waf_rules/modsecurity.conf"
+    regexp: "^SecRuleEngine DetectionOnly$"
+    line: "SecRuleEngine On"
+
+- name: "Updating ModeSecurity detection mode"
+  lineinfile:
+    state: present
+    insertafter: EOF
+    path: "/etc/nginx/waf_rules/modsecurity.conf"
+    line: "SecDefaultAction \"phase:2,log,auditlog,deny,status:403,tag:'ATTACK_REJECTED'\""
+  when: not detection_only
+
+- name: "Copying ModeSecurity main configuration"
+  copy:
+    src: "./files/main.conf"
+    dest: "/etc/nginx/waf_rules/main.conf"
+    mode: "644"

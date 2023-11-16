@@ -1,0 +1,7 @@
+# handlers file for mod_security
+- name: restart nginx
+  service:
+    name: "nginx"
+    state: restarted
+- name: config test
+  command: nginx -t

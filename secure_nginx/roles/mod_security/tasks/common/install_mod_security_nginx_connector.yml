@@ -1,0 +1,61 @@
+- name: Cloning ModeSecurity nginx connector
+  git:
+    repo: https://github.com/SpiderLabs/ModSecurity-nginx.git
+    dest: "{{ source_dir }}/ModSecurity-nginx"
+    depth: 1
+
+- set_fact:
+   nginx_version: "{{ ansible_facts.packages['nginx'][0].version | regex_search('[0-9.]*') }}"
+
+- name: "Downloading nginx {{ nginx_version }}"
+  get_url:
+    url: "http://nginx.org/download/nginx-{{ nginx_version }}.tar.gz"
+    dest: "{{ source_dir }}"
+    force: yes
+
+- name: "Extracting nginx {{ nginx_version }}"
+  unarchive:
+    src: "{{ source_dir }}/nginx-{{ nginx_version }}.tar.gz"
+    dest: "{{ source_dir }}"
+    remote_src: yes
+
+- name: "Configuring nginx module"
+  command:
+    argv:
+      - "./configure"
+      - "--with-compat"
+      - "--add-dynamic-module=../ModSecurity-nginx"
+    chdir: "{{ source_dir }}/nginx-{{ nginx_version }}"
+
+- name: "Making nginx ModeSecurity connector module"
+  command:
+    argv:
+      - "make"
+      - "-j{{ ansible_facts['processor_nproc'] }}"
+      - "modules"
+    chdir: "{{ source_dir }}/nginx-{{ nginx_version }}"
+
+- name: "Copying ModeSecurity nginx library"
+  copy:
+    src: "{{ source_dir }}/nginx-{{ nginx_version }}/objs/ngx_http_modsecurity_module.so"
+    dest: "/lib/nginx/modules/"
+    mode: "644"
+    remote_src: yes
+
+- name: "Creating nginx ModeSecurity module configuration"
+  copy:
+    src: "./files/mod-http-modsecurity.conf"
+    dest: "/usr/share/nginx/modules-available/mod-http-modsecurity.conf"
+    mode: "644"
+
+- name: "Deleting exiting nginx ModeSecurity module"
+  file:
+    path: "/etc/nginx/modules-enabled/mod-http-modsecurity.conf"
+    state: absent
+    force: yes
+
+- name: "Linking nginx ModeSecurity module"
+  file:
+    src: "/usr/share/nginx/modules-available/mod-http-modsecurity.conf"
+    dest: "/etc/nginx/modules-enabled/mod-http-modsecurity.conf"
+    state: link

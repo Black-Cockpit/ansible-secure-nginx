@@ -1,0 +1,5 @@
+# vars file for cis_hardening
+security_best_practices:
+  enable: true
+  hide_x_powered_by_header: true
+  hide_server_header: true

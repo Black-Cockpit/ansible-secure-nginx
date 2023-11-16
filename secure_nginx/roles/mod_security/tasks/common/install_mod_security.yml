@@ -1,0 +1,48 @@
+- name: Downloading ModSecurity
+  get_url:
+    url: "https://github.com/SpiderLabs/ModSecurity/releases/download/v{{module_version}}/modsecurity-v{{module_version}}.tar.gz"
+    dest: "{{ source_dir }}"
+    force: yes
+
+- name: Extracting ModSecurity
+  unarchive:
+    src: "{{ source_dir }}/modsecurity-v{{module_version}}.tar.gz"
+    dest: "{{ source_dir }}"
+    remote_src: yes
+
+- name: Configuring ModSecurity
+  shell:
+    cmd: "./configure"
+    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+  environment:
+    CFLAGS: "-g -O0"
+
+- name: Making ModSecurity
+  command:
+    argv:
+      - "make"
+      - "-j{{ ansible_facts['processor_nproc'] }}"
+    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+  environment:
+    CFLAGS: "-g -O0"
+
+- name: Installing ModSecurity
+  command:
+    argv:
+      - "make"
+      - "-j{{ ansible_facts['processor_nproc'] }}"
+      - "install"
+    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+  environment:
+    CFLAGS: "-g -O0"
+
+- name: Cleaning ModSecurity
+  command:
+    argv:
+      - "make"
+      - "clean"
+    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+
+- name: Linking libraries
+  shell:
+    cmd: "ldconfig"

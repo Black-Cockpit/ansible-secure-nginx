@@ -1,0 +1,25 @@
+namespace: hasnimehdi91
+name: secure_nginx
+version: 1.0.0
+readme: README.md
+authors:
+- Hasni Mehdi hasnimehdi@outlook.com
+description: This collection provides roles to securely install and configure nginx.
+license_file: 'LICENSE'
+tags:
+- nginx
+- web_server
+- secure_web_server
+- nginx_security
+- cis_hardening
+- nginx_cis
+- web_application_firewall
+- mod_security
+- nginx_mod_security
+dependencies: {}
+repository: https://github.com/Black-Cockpit/ansible-secure-nginx
+documentation: https://github.com/Black-Cockpit/ansible-secure-nginx/blob/master/doc
+homepage: https://github.com/Black-Cockpit/ansible-secure-nginx
+issues: https://github.com/Black-Cockpit/ansible-secure-nginx/issues
+build_ignore: []
+
