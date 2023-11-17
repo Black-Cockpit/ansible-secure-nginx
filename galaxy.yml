@@ -21,5 +21,6 @@ repository: https://github.com/Black-Cockpit/ansible-secure-nginx
 documentation: https://github.com/Black-Cockpit/ansible-secure-nginx/blob/master/doc
 homepage: https://github.com/Black-Cockpit/ansible-secure-nginx
 issues: https://github.com/Black-Cockpit/ansible-secure-nginx/issues
-build_ignore: []
+build_ignore:
+- .venv
 
