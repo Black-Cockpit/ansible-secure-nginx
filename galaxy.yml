@@ -1,6 +1,6 @@
 namespace: hasnimehdi91
 name: secure_nginx
-version: 1.0.1
+version: 1.1.0
 readme: README.md
 authors:
 - Hasni Mehdi hasnimehdi@outlook.com
@@ -11,8 +11,6 @@ tags:
 - web_server
 - secure_web_server
 - nginx_security
-- cis_hardening
-- nginx_cis
 - web_application_firewall
 - mod_security
 - nginx_mod_security
