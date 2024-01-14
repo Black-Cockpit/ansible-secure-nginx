@@ -1,24 +1,36 @@
+# Clone ModSecurity nginx connector
 - name: Cloning ModeSecurity nginx connector
   git:
     repo: https://github.com/SpiderLabs/ModSecurity-nginx.git
     dest: "{{ source_dir }}/ModSecurity-nginx"
     depth: 1
 
-- set_fact:
-   nginx_version: "{{ ansible_facts.packages['nginx'][0].version | regex_search('[0-9.]*') }}"
+# Extrat nginx current version
+- name: Extrating nginx version
+  shell:
+    cmd: nginx -v 2>&1 | grep -Eo '[0-9.]*'
+  register: current_nginx
 
+# Extract nginx version
+- set_fact:
+    nginx_version: "{{ current_nginx.stdout | regex_search('[0-9.]*') }}"
+  changed_when: false
+
+# Download nginx source
 - name: "Downloading nginx {{ nginx_version }}"
   get_url:
     url: "http://nginx.org/download/nginx-{{ nginx_version }}.tar.gz"
     dest: "{{ source_dir }}"
     force: yes
 
+# Extract nginx
 - name: "Extracting nginx {{ nginx_version }}"
   unarchive:
     src: "{{ source_dir }}/nginx-{{ nginx_version }}.tar.gz"
     dest: "{{ source_dir }}"
     remote_src: yes
 
+# Configure nginx module for compilation
 - name: "Configuring nginx module"
   command:
     argv:
@@ -27,6 +39,7 @@
       - "--add-dynamic-module=../ModSecurity-nginx"
     chdir: "{{ source_dir }}/nginx-{{ nginx_version }}"
 
+# Make nginx module
 - name: "Making nginx ModeSecurity connector module"
   command:
     argv:
@@ -35,27 +48,72 @@
       - "modules"
     chdir: "{{ source_dir }}/nginx-{{ nginx_version }}"
 
+# Extract nginx module path
+- name: "Extracting nginx module path"
+  shell:
+    cmd: |
+      build_config=$(command -v nginx &> /dev/null && nginx -V 2>&1)
+      echo "$build_config" | sed -e 's@\s--@\n@g' | grep modules-path | awk -F '=' '{print $2}' | sed -e 's@\s@@g'
+  register: nginx_module_path_extration
+
+# Check if nginx modules path is extracted
+- name: "Checkinf nginx module path"
+  assert:
+    that:
+      - nginx_module_path_extration.stdout != ''
+    fail_msg: "Failed to identify nginx modules path"
+    success_msg: "OK"
+
+# Define nginx modules path
+- set_fact:
+    nginx_modules_path: "{{ nginx_module_path_extration.stdout }}"
+  changed_when: false
+
+# Create modules directory if it does not exists
+- name: Creating module directory
+  file:
+    path: "{{ nginx_modules_path }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+# Copy ModeSecurity to modules directory
 - name: "Copying ModeSecurity nginx library"
   copy:
     src: "{{ source_dir }}/nginx-{{ nginx_version }}/objs/ngx_http_modsecurity_module.so"
-    dest: "/lib/nginx/modules/"
-    mode: "644"
+    dest: "{{ nginx_modules_path }}"
+    mode: "0660"
+    owner: root
+    group: root
+    force: true
     remote_src: yes
 
-- name: "Creating nginx ModeSecurity module configuration"
-  copy:
-    src: "./files/mod-http-modsecurity.conf"
-    dest: "/usr/share/nginx/modules-available/mod-http-modsecurity.conf"
-    mode: "644"
-
-- name: "Deleting exiting nginx ModeSecurity module"
+# Create nginx extra modules directory
+- name: Creating nginx extra modules directory
   file:
-    path: "/etc/nginx/modules-enabled/mod-http-modsecurity.conf"
-    state: absent
-    force: yes
+     path: "/etc/nginx/extras"
+     state: directory
+     mode: "0755"
+     owner: root
+     group: root
 
-- name: "Linking nginx ModeSecurity module"
-  file:
-    src: "/usr/share/nginx/modules-available/mod-http-modsecurity.conf"
-    dest: "/etc/nginx/modules-enabled/mod-http-modsecurity.conf"
-    state: link
+# Copy ModeSecurity module configuration
+- name: Copy ModeSecurity module configuration
+  template:
+    src: "templates/etc/nginx/extras/mod-http-modsecurity.conf.j2"
+    dest: "/etc/nginx/extras/mod-http-modsecurity.conf"
+    mode: "0660"
+    owner: root
+    group: root
+
+# Update nginx configuration
+- name: Updating nginx configuration
+  lineinfile:
+    path: "/etc/nginx/nginx.conf"
+    line: |
+      # Nginx extra modules
+      include /etc/nginx/extras/*.conf;
+
+    insertbefore: '[\s]{0,}events[\s]{0,}[\{]'
+    state: present

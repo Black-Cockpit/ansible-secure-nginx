@@ -1,29 +1,64 @@
+# Create WAF rules directory
 - name: Creating rule directory /etc/nginx/waf_rules
   file:
     path: "/etc/nginx/waf_rules"
     state: directory
     recurse: yes
 
+# Create ModeSecurity audit log directory
+- name: Creating ModeSecurity audit log directory
+  file:
+    path: "/var/log/mod_security/audit"
+    mode: "0700"
+    owner: root
+    group: root
+    state: directory
+    recurse: true
+
+# Download community rules
 - name: Downloading community rules
   get_url:
     url: "https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/modsecurity.conf-recommended"
     dest: "/etc/nginx/waf_rules/modsecurity.conf"
-    mode: "644"
+    mode: "0660"
+    owner: root
+    group: root
+    force: true
 
+# Copy mapping
 - name: Copying ModeSecurity unicode mapping
   copy:
     src: "{{ source_dir }}/modsecurity-v{{ module_version }}/unicode.mapping"
     dest: "/etc/nginx/waf_rules/"
     remote_src: yes
-    mode: "644"
+    mode: "0660"
+    owner: root
+    group: root
+    force: true
 
-- name: Updating ModeSecurity configuration
+# Enforce rules
+- name: Enabling ModeSecurity engine
   lineinfile:
     path: "/etc/nginx/waf_rules/modsecurity.conf"
     regexp: "^SecRuleEngine DetectionOnly$"
     line: "SecRuleEngine On"
 
-- name: "Updating ModeSecurity detection mode"
+# Update ModeSecurity audit log directory
+- name: Updating ModeSecurity audit log directory
+  replace:
+    path: "/etc/nginx/waf_rules/modsecurity.conf"
+    regexp: '[#]{0,}(SecAuditLogStorageDir)\s.+$'
+    replace: "SecAuditLogStorageDir /var/log/mod_security/audit"
+
+# Update ModeSecurity audit log file
+- name: Updating ModeSecurity audit log file
+  replace:
+    path: "/etc/nginx/waf_rules/modsecurity.conf"
+    regexp: '[#]{0,}(SecAuditLog)\s.+$'
+    replace: "SecAuditLog /var/log/mod_security/audit/modsec_audit.log"
+
+# Update ModeSecurity action response
+- name: "Updating ModeSecurity action response"
   lineinfile:
     state: present
     insertafter: EOF
@@ -31,8 +66,12 @@
     line: "SecDefaultAction \"phase:2,log,auditlog,deny,status:403,tag:'ATTACK_REJECTED'\""
   when: not detection_only
 
+# Copy main WAF rules
 - name: "Copying ModeSecurity main configuration"
   copy:
     src: "./files/main.conf"
     dest: "/etc/nginx/waf_rules/main.conf"
-    mode: "644"
+    mode: "0660"
+    owner: root
+    group: root
+    force: true

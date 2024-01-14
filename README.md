@@ -19,5 +19,3 @@ This collection provides roles to securely install and configure nginx.
   - hasnimehdi91.secure_nginx.install
   # Install ModSecurity web application firewall
   - hasnimehdi91.secure_nginx.mod_security
-  # Harden nginx using cis benchmark 
-  - hasnimehdi91.secure_nginx.cis_hardening

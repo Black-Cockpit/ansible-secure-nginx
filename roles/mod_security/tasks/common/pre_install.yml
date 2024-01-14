@@ -1,0 +1,60 @@
+# Define build directory
+- set_fact:
+    source_dir: "{{ build_dir }}/modSecurity"
+  changed_when: false
+
+# Gathering facts
+- name: Gathering package fact
+  package_facts:
+    manager: auto
+  changed_when: false
+
+# Check target platforms 
+- name: "Pre Audit | Check OS version and family"
+  assert:
+    that: ansible_distribution in {{ supported_distribution }}
+    fail_msg: "This role can only be run against Supported OSs. {{ ansible_distribution }} {{ ansible_distribution_major_version }} is not supported."
+    success_msg: "This role is running against a supported OS {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
+  changed_when: false
+  tags:
+  - always
+
+# Check if nginx is installed
+- name: Check if nginx is installed
+  shell:
+    cmd: command -v nginx 2>&1 >/dev/null && echo installed || echo not_installed
+  register: is_nginx_installed
+
+# Validate nginx installation
+- assert:
+    that:
+      - is_nginx_installed.stdout == 'installed'
+    fail_msg: "Nginx is not installed, please install nginx and retry again"
+    success_msg: "OK"
+  changed_when: false
+
+# Set rhel as a target
+- set_fact:
+    target_platform: rhel
+  when: ansible_distribution == 'CentOS' or ansible_os_family == 'RedHat' or ansible_os_family == "Rocky" or ansible_os_family == "AlmaLinux"
+  changed_when: false
+
+# Set debian as a target
+- set_fact:
+    target_platform: debian
+  when: ansible_distribution == 'Ubuntu' or ansible_os_family == 'Debian'
+  changed_when: false
+
+# Deleting source directory
+- name: Deleting source directory
+  file:
+    path: "{{ source_dir }}"
+    state: absent
+    force: yes
+
+# Creating source directory
+- name: Creating source directory
+  file:
+    path: "{{ source_dir }}"
+    state: directory
+    force: yes

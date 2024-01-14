@@ -1,3 +1,8 @@
+# Build directory
 build_dir: "/tmp"
+
+# ModSecurity version default is v3.0.10
 module_version: "3.0.10"
+
+# Disable ModSecurity action
 detection_only: false

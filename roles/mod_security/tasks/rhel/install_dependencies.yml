@@ -1,0 +1,28 @@
+# Update repository
+- name: Updating repositories
+  yum:
+    update_cache: yes
+    enablerepo: epel-release
+
+# Install dependencies
+- name: Installing dependencies
+  dnf:
+    name: "{{ item }}"
+    state: installed
+    update_cache: true
+  loop:
+  - "@Development Tools"
+  - epel-release
+  - httpd-devel 
+  - pcre 
+  - pcre-devel
+  - libxml2 
+  - libxml2-devel
+  - curl 
+  - curl-devel
+  - openssl
+  - openssl-devel
+  - git
+  - yajl
+  - geoip-devel
+  - libinjection-devel
