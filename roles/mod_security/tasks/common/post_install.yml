@@ -1,0 +1,10 @@
+# Remove compiler
+- name: "Removing compiler"
+  package:
+    name: "{{ item }}"
+    state: absent
+  loop:
+  - gcc
+  - make
+  - automake
+  - git

@@ -1,2 +1,14 @@
----
 # defaults file for mod_security
+
+
+# Target platform: Set later on the pre-audit tasks 
+target_platform: ''
+
+# Supported platforms
+supported_distribution:
+- CentOS
+- RedHat
+- Rocky
+- AlmaLinux
+- Ubuntu
+- Debian

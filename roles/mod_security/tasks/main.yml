@@ -1,23 +1,10 @@
-- set_fact:
-    source_dir: "{{ build_dir }}/modSecurity"
-
-- name: Gathering package fact
-  package_facts:
-    manager: auto
-
-- name: Checking nginx binary
-  fail:
-    msg: "Nginx is not installed"
-  failed_when: '"nginx" not in ansible_facts.packages'
-
 - name: Preparing environment
   include_tasks:
-    file: "common/prepare_environment.yml"
+    file: "common/pre_install.yml"
 
 - name: Installing requirements
   include_tasks:
-    file: "debian/install_dependencies.yml"
-  when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+    file: "{{ target_platform }}/install_dependencies.yml"
 
 - name: Installing ModSecurity
   include_tasks:
@@ -30,3 +17,7 @@
 - name: Installing ModeSecurity community rules
   include_tasks:
     file: "common/install_community_rules.yml"
+
+- name: Cleaning environment
+  include_tasks:
+    file: "common/post_install.yml"

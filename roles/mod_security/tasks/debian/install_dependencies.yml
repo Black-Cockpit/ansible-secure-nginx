@@ -1,7 +1,9 @@
+# Update repository
 - name: Updating repositories
   apt:
     update_cache: yes
 
+# Install dependencies
 - name: Installing dependencies
   apt:
     name: "{{ item }}"
@@ -20,5 +22,5 @@
   - libtool 
   - libxml2-dev
   - libyajl-dev 
-  - pkgconf 
-  - zlib1g-dev
+  - pkgconf
+  - libyajl-dev

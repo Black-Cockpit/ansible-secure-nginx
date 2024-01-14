@@ -1,15 +1,18 @@
+# Download ModSecurity
 - name: Downloading ModSecurity
   get_url:
     url: "https://github.com/SpiderLabs/ModSecurity/releases/download/v{{module_version}}/modsecurity-v{{module_version}}.tar.gz"
     dest: "{{ source_dir }}"
     force: yes
 
+# Extract ModeSecurity
 - name: Extracting ModSecurity
   unarchive:
     src: "{{ source_dir }}/modsecurity-v{{module_version}}.tar.gz"
     dest: "{{ source_dir }}"
     remote_src: yes
 
+# Configure ModeSecurity for compilation
 - name: Configuring ModSecurity
   shell:
     cmd: "./configure"
@@ -17,6 +20,7 @@
   environment:
     CFLAGS: "-g -O0"
 
+# Make ModeSecurity
 - name: Making ModSecurity
   command:
     argv:
@@ -26,6 +30,7 @@
   environment:
     CFLAGS: "-g -O0"
 
+# Install ModeSecurity
 - name: Installing ModSecurity
   command:
     argv:
@@ -36,6 +41,7 @@
   environment:
     CFLAGS: "-g -O0"
 
+# Cleaning build directory
 - name: Cleaning ModSecurity
   command:
     argv:
@@ -43,6 +49,7 @@
       - "clean"
     chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
 
+# Linking libraries
 - name: Linking libraries
   shell:
     cmd: "ldconfig"
