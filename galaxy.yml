@@ -1,6 +1,6 @@
 namespace: hasnimehdi91
 name: secure_nginx
-version: 1.1.0
+version: 1.1.1
 readme: README.md
 authors:
 - Hasni Mehdi hasnimehdi@outlook.com
@@ -20,5 +20,50 @@ documentation: https://github.com/Black-Cockpit/ansible-secure-nginx/blob/master
 homepage: https://github.com/Black-Cockpit/ansible-secure-nginx
 issues: https://github.com/Black-Cockpit/ansible-secure-nginx/issues
 build_ignore:
+- .git
+- .gitignore
+- .build_ignore
+- .vscode
+- .env
 - .venv
-
+- .vagrant
+- .pytest_cache
+- .tox
+- .cache
+- .coverage
+- .ropeproject
+- .ackrc
+- .python-version
+- .DS_Store
+- .idea
+- .project
+- .pydevproject
+- '*.tar.gz'
+- '*.pyc'
+- '*.pyo'
+- '*.retry'
+- '*.log'
+- '*.out'
+- '*.swp'
+- '*.swo'
+- '*.iml'
+- '*.sublime-project'
+- '*.sublime-workspace'
+- __pycache__
+- build.venv
+- test
+- tests
+- molecule
+- venv
+- env
+- ENV
+- env.bak
+- venv.bak
+- Vagrantfile
+- requirements.txt
+- credentials.yml
+- results.xml
+- coverage.xml
+- htmlcov
+- changelogs/.plugin-cache.yaml
+- .ansible-test-timeout.json

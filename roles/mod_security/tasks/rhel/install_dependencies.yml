@@ -24,5 +24,36 @@
   - openssl-devel
   - git
   - yajl
-  - geoip-devel
   - libinjection-devel
+
+# Install GeoIP packages (differs by OS major version)
+- name: Installing geoip-devel (RHEL < 9)
+  dnf:
+    name: geoip-devel
+    state: installed
+  when: ansible_distribution_major_version | int < 9
+
+- name: Enabling CodeReady Builder repository (RHEL >= 9)
+  command: >
+    subscription-manager repos
+    --enable codeready-builder-for-rhel-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}-rpms
+  when:
+  - ansible_distribution_major_version | int >= 9
+  - ansible_distribution == 'RedHat'
+  changed_when: true
+
+- name: Enabling CRB repository (RHEL-based >= 9, non-RHEL)
+  command: dnf config-manager --set-enabled crb
+  when:
+  - ansible_distribution_major_version | int >= 9
+  - ansible_distribution != 'RedHat'
+  changed_when: true
+
+- name: Installing libmaxminddb packages (RHEL >= 9)
+  dnf:
+    name: "{{ item }}"
+    state: installed
+  loop:
+  - libmaxminddb
+  - libmaxminddb-devel
+  when: ansible_distribution_major_version | int >= 9

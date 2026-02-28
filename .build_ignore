@@ -1,7 +1,16 @@
+.git/
+.gitignore
+tests/
+molecule/
+*.log
+*.retry
+__pycache__/
+*.pyc
+**/*.venv
+
 # build products...
 *.py[co]
 build
-**/*.venv
 AUTHORS.TXT
 **/*.gz
 # Emacs backup and autosave files...
