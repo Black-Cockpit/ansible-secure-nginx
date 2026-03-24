@@ -12,7 +12,8 @@
 # Check target platforms 
 - name: "Pre Audit | Check OS version and family"
   assert:
-    that: ansible_distribution in {{ supported_distribution }}
+    that:
+    - ansible_distribution in supported_distribution
     fail_msg: "This role can only be run against Supported OSs. {{ ansible_distribution }} {{ ansible_distribution_major_version }} is not supported."
     success_msg: "This role is running against a supported OS {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
   changed_when: false
@@ -28,7 +29,7 @@
 # Validate nginx installation
 - assert:
     that:
-      - is_nginx_installed.stdout == 'installed'
+    - is_nginx_installed.stdout == 'installed'
     fail_msg: "Nginx is not installed, please install nginx and retry again"
     success_msg: "OK"
   changed_when: false
