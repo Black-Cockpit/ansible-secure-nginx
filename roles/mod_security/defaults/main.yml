@@ -1,14 +1,31 @@
 # defaults file for mod_security
+#
+# Role defaults sit at the bottom of Ansible's precedence order, so anything
+# here can be overridden from inventory. The role's build settings deliberately
+# do not live here — see vars/main.yml for those and for what that costs.
 
-
-# Target platform: Set later on the pre-audit tasks 
+# Directory name under tasks/ that main.yml interpolates to pick the dependency
+# task file. It is not an operator setting: pre_install.yml overwrites it with
+# "rhel" or "debian" from the distribution fact before main.yml reaches the
+# include that reads it.
+#
+# The empty default is the failure mode, not a placeholder. A distribution that
+# passes the supported_distribution assertion but matches neither of the two
+# set_fact conditions leaves this empty, and the include then fails on a path
+# with nothing where the directory should be — loudly, on the host that caused
+# it, instead of quietly picking one of the two platforms.
 target_platform: ''
 
-# Supported platforms
+# Distributions the assertion in tasks/common/pre_install.yml accepts. It has
+# to stay in step with the two target_platform conditions in that same file — a
+# name added here without a matching condition trips the empty-target_platform
+# failure described above — and with the install role's list of the same name,
+# because the two roles are run back to back against the same host.
 supported_distribution:
 - CentOS
 - RedHat
 - Rocky
 - AlmaLinux
+- OracleLinux
 - Ubuntu
 - Debian

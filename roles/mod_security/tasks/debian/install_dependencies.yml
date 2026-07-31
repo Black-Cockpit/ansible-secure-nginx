@@ -1,26 +1,49 @@
-# Update repository
-- name: Updating repositories
+# Phase two of the mod_security role on the Debian family: installs the
+# compiler toolchain and the development headers both source builds need.
+#
+# Selected by target_platform, which pre_install.yml sets to "debian" for Debian
+# and Ubuntu. The package names themselves are not here — they live in
+# vars/packages/ and are resolved per release, so a name that changes in one
+# Ubuntu or Debian version is a new file rather than a condition in this one.
+#
+# Everything installed here is a build-time dependency. The post-install phase
+# removes gcc, make, automake and git again — gcc and make arrive as part of
+# build-essential, so that removal takes apart a package the archive treats as
+# a unit, and every -dev package stays on the host.
+
+# Dependencies | Resolve the package set for this release. The chain tries the
+# specific release first and falls back to the family, so packages/Debian.yml
+# serves Debian 11 and 12 and Ubuntu 22.04 and 24.04 today, and a release that
+# later needs a different name is added as packages/Ubuntu-26.yml without
+# touching this file or the releases that were already working.
+- name: "Dependencies | Loading the package set for this release"
+  include_vars:
+    file: "{{ lookup('ansible.builtin.first_found', mod_security_package_set) }}"
+  vars:
+    mod_security_package_set:
+      files:
+      - "packages/{{ ansible_facts['distribution'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+      - "packages/{{ ansible_facts['os_family'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+      - "packages/{{ ansible_facts['os_family'] }}.yml"
+      paths:
+      - "{{ role_path }}/vars"
+
+# Dependencies | Refresh the apt index before anything is resolved against it.
+# apt never does this on its own, and on an image that has been sitting unused
+# the cached index still names package files the mirror has rotated out of its
+# pool, so the install below fails on a 404 rather than on anything that points
+# at the real cause.
+- name: "Dependencies | Updating the repositories"
   apt:
     update_cache: yes
 
-# Install dependencies
-- name: Installing dependencies
+# Dependencies | Install the whole set in one transaction rather than looping a
+# package at a time, so apt resolves the dependency graph once and a name that
+# does not exist is reported before anything is unpacked. install_recommends is
+# left on because build-essential's recommended set is where several of the
+# tools the ModSecurity configure script probes for come from.
+- name: "Dependencies | Installing the build requirements"
   apt:
-    name: "{{ item }}"
+    name: "{{ mod_security_build_packages }}"
     state: present
     install_recommends: yes
-  loop:
-  - apt-utils
-  - autoconf 
-  - automake 
-  - build-essential 
-  - git 
-  - libcurl4-openssl-dev 
-  - libgeoip-dev 
-  - liblmdb-dev 
-  - libpcre++-dev 
-  - libtool 
-  - libxml2-dev
-  - libyajl-dev 
-  - pkgconf
-  - libyajl-dev

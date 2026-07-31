@@ -1,0 +1,31 @@
+# Installation: run the collection's two roles against the matrix entry, in
+# the order the collection documents.
+#
+# The order is a hard dependency, not a convention. The mod_security role
+# refuses to run on a host without nginx, and it compiles its connector
+# against the exact version it finds there, so whichever nginx the install
+# role puts on the host is the one the module is built for. Running
+# mod_security alone fails in its pre-install assertion; running it against
+# an nginx installed by something else is a different test from this one.
+#
+# The roles are named bare rather than as
+# hasnimehdi91.secure_nginx.<role>, so they resolve through roles_path in
+# ../ansible.cfg and the run exercises the working tree instead of a copy of
+# the collection installed on the host.
+#
+# This play changes the target, and it is the only thing in the harness that
+# does: everything in verify.yml is read-only apart from the nginx restart
+# documented there.
+#
+# Expected extra-vars (supplied by run.sh from the platforms.yml entry):
+#   entry_name      matrix entry name (used only for play naming)
+#   detection_only  whether the WAF blocks or only logs. It reaches the role
+#                   as an extra-var because mod_security keeps the variable
+#                   in vars/, which outranks anything this play could set.
+- name: "Install {{ entry_name }}"
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - install
+    - mod_security

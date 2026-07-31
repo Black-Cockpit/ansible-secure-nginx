@@ -1,55 +1,87 @@
-# Download ModSecurity
-- name: Downloading ModSecurity
+# Phase three of the mod_security role: builds libmodsecurity from the upstream
+# release tarball and installs it into the system library path.
+#
+# Every task here works inside the directory
+# "{{ source_dir }}/modsecurity-v{{ module_version }}", the tree that
+# pre_install.yml recreated, so this file cannot be run against a host that has
+# not been through phase one in the same play. The tree is left in place
+# afterwards on purpose: the rules phase copies unicode.mapping back out of it.
+#
+# CFLAGS is pinned to "-g -O0" on configure, make and make install. That turns
+# optimisation off and keeps full debug symbols, which makes the resulting
+# library slower and larger than a release build — a deliberate trade, taken so
+# that a crash inside the WAF is diagnosable on the host it happened on. The
+# three tasks have to agree on the value: a configure run that recorded one
+# CFLAGS and a make run that used another produce a build whose object files
+# do not match the recorded configuration. Do not "tidy" it in one place only.
+
+# Install | Fetch the release tarball pinned by module_version, so the library
+# and the connector compiled in the next phase are both built from a source
+# tree whose contents are known rather than from whatever upstream's default
+# branch holds today.
+- name: "Install | Downloading ModSecurity"
   get_url:
-    url: "https://github.com/SpiderLabs/ModSecurity/releases/download/v{{module_version}}/modsecurity-v{{module_version}}.tar.gz"
+    url: "https://github.com/SpiderLabs/ModSecurity/releases/download/v{{ module_version }}/modsecurity-v{{ module_version }}.tar.gz"
     dest: "{{ source_dir }}"
     force: yes
 
-# Extract ModeSecurity
-- name: Extracting ModSecurity
+# Install | Unpack the tarball in place. Every task below chdirs into the
+# directory this creates, and its name embeds module_version, which is why the
+# variable appears in each of their paths rather than being resolved once.
+- name: "Install | Extracting ModSecurity"
   unarchive:
-    src: "{{ source_dir }}/modsecurity-v{{module_version}}.tar.gz"
+    src: "{{ source_dir }}/modsecurity-v{{ module_version }}.tar.gz"
     dest: "{{ source_dir }}"
     remote_src: yes
 
-# Configure ModeSecurity for compilation
-- name: Configuring ModSecurity
+# Install | Generate the makefiles for this host. Run through shell rather than
+# command because the release tarball ships a pre-generated configure script
+# that is invoked from the tree it lives in.
+- name: "Install | Configuring ModSecurity"
   shell:
     cmd: "./configure"
-    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+    chdir: "{{ source_dir }}/modsecurity-v{{ module_version }}"
   environment:
     CFLAGS: "-g -O0"
 
-# Make ModeSecurity
-- name: Making ModSecurity
+# Install | Compile the library, one job per core reported by the host. This is
+# the longest step in the role by a wide margin, and it is where a missing
+# development header from the dependencies phase shows up.
+- name: "Install | Compiling ModSecurity"
   command:
     argv:
       - "make"
       - "-j{{ ansible_facts['processor_nproc'] }}"
-    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+    chdir: "{{ source_dir }}/modsecurity-v{{ module_version }}"
   environment:
     CFLAGS: "-g -O0"
 
-# Install ModeSecurity
-- name: Installing ModSecurity
+# Install | Install the shared library and its headers system-wide. The
+# connector build in the next phase resolves them from there, not from this
+# tree.
+- name: "Install | Installing ModSecurity"
   command:
     argv:
       - "make"
       - "-j{{ ansible_facts['processor_nproc'] }}"
       - "install"
-    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+    chdir: "{{ source_dir }}/modsecurity-v{{ module_version }}"
   environment:
     CFLAGS: "-g -O0"
 
-# Cleaning build directory
-- name: Cleaning ModSecurity
+# Install | Drop the object files now that the library is installed, while
+# keeping the source tree itself — the rules phase still needs
+# unicode.mapping out of it.
+- name: "Install | Cleaning the ModSecurity build tree"
   command:
     argv:
       - "make"
       - "clean"
-    chdir: "{{ source_dir }}/modsecurity-v{{module_version}}"
+    chdir: "{{ source_dir }}/modsecurity-v{{ module_version }}"
 
-# Linking libraries
-- name: Linking libraries
+# Install | Rebuild the dynamic linker cache so the freshly installed
+# libmodsecurity is resolvable. Without this the connector links at build time
+# but nginx fails to load the module at startup.
+- name: "Install | Refreshing the shared library cache"
   shell:
     cmd: "ldconfig"

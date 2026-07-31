@@ -1,8 +1,34 @@
-# Build directory
+# vars file for mod_security
+#
+# These are role vars, not role defaults, and the difference is visible to
+# operators: a value set here outranks the same name set in inventory
+# group_vars or host_vars, or in play vars, and silently wins. Overriding any
+# of the three below therefore has to be done either as a role parameter, on
+# the "roles:" entry that includes this role, or with an extra var on the
+# command line.
+
+# Root of the build tree. pre_install.yml appends "/modSecurity" to it and
+# deletes and recreates that subdirectory on every run, so this variable names
+# a parent to build under, never the directory that gets wiped.
+#
+# The default is /tmp, where two host policies commonly bite: a /tmp mounted
+# noexec makes the configure and make steps fail, since both execute scripts
+# from inside the build tree, and a /tmp cleaned on a schedule can remove the
+# ModSecurity source tree between the install phase and the rules phase that
+# copies unicode.mapping back out of it. Point this at a normal directory on
+# hosts with either policy.
 build_dir: "/tmp"
 
-# ModSecurity version default is v3.0.10
-module_version: "3.0.10"
+# ModSecurity release to build. The value is interpolated into both the
+# download URL and the name of the directory the tarball unpacks into, so it
+# has to match an upstream release tag exactly, without the leading "v".
+module_version: "3.0.16"
 
-# Disable ModSecurity action
+# Whether the WAF observes or blocks. false, the default, appends a
+# SecDefaultAction that answers a rule match with 403; true leaves it out, so
+# matches are logged and the request is served.
+#
+# This does not control the rule engine itself: install_community_rules.yml
+# rewrites upstream's "SecRuleEngine DetectionOnly" to "On" either way, so
+# rules are always evaluated and always logged.
 detection_only: false

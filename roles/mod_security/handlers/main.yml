@@ -1,7 +1,23 @@
 # handlers file for mod_security
-- name: restart nginx
+#
+# Nothing in this role notifies either handler. The role changes nginx.conf and
+# drops files under /etc/nginx, so a running nginx does not pick any of it up
+# until it is reloaded or restarted by hand, or by whatever runs after this
+# role. Wiring the notifications up would change what the role does to a live
+# web server, so they are left as they are and the gap is recorded here
+# instead.
+
+# Handler | Restart nginx so a changed configuration is in effect. A restart
+# rather than a reload because the role installs a dynamic module, and
+# load_module is only read on a full start.
+- name: "Handler | Restarting nginx"
   service:
     name: "nginx"
     state: restarted
-- name: config test
+
+# Handler | Validate the configuration with nginx -t. Intended to run before
+# the restart above so a broken file is caught while the old process is still
+# serving; handler order is the order they are declared in, not the order they
+# are notified in, so this one runs second as written.
+- name: "Handler | Testing the nginx configuration"
   command: nginx -t

@@ -1,0 +1,47 @@
+# Integration test matrix for the hasnimehdi91.secure_nginx collection.
+#
+# Each entry is one disposable VM. The Vagrantfile defines one machine per
+# entry and run.sh drives it through up -> install -> verify -> destroy.
+# This file is the single source of truth: the machine definitions, the
+# harness entry list and the generated Makefile targets are all read from it,
+# so adding a platform is a new entry here and nothing else.
+#
+# Fields:
+#   box             VirtualBox Vagrant box the entry boots
+#   firmware        efi (the default) or bios — must match how the box's disk
+#                   image boots, and getting it wrong hangs the boot rather
+#                   than failing it
+#   memory / cpus   VM resources
+#   disk_size       marks the entry as needing the in-guest filesystem grow
+#                   (provision/grow_disk.sh). It is a flag, not a request:
+#                   the virtual disk is never resized, only the root
+#                   partition inside a box that ships more disk than it
+#                   partitions. The value records the size the box ships.
+#   detection_only  optional, default false. Forwarded to both playbooks so
+#                   the mod_security role runs in the mode verify.yml then
+#                   asserts against. true means the WAF logs but does not
+#                   answer a rule match with 403, which removes the
+#                   SecDefaultAction assertion from the verification.
+#
+# Both entries ask for more memory and cores than an installer test normally
+# needs. The mod_security role compiles libmodsecurity and the nginx source
+# on the target: make runs one job per core, so the core count is most of the
+# wall clock, and the link step is where the memory peaks. Expect roughly
+# 10-20 minutes per entry, nearly all of it in those two compiles.
+#
+# These two entries are the platforms the collection is tested on. The roles
+# accept a wider list — RHEL, CentOS, Rocky, Oracle Linux and Debian all pass
+# their platform assertions — but accepted is not the same claim as tested.
+platforms:
+  ubuntu2404:
+    box: bento/ubuntu-24.04
+    firmware: bios
+    memory: 4096
+    cpus: 4
+    disk_size: 20GB
+
+  alma10:
+    box: almalinux/10
+    memory: 4096
+    cpus: 4
+    disk_size: 20GB

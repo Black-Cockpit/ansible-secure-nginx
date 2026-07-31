@@ -1,8 +1,39 @@
-- name: Updating repositories
+# Installs nginx on the Debian family from the distribution's own repository.
+#
+# The package source differs from the Enterprise Linux path on purpose. That
+# path pulls nginx from nginx.org so the version has a matching source tarball
+# for the mod_security connector build; switching Debian hosts to the same
+# repository would replace the nginx build on every existing deployment, which
+# is a change of behaviour rather than a fix, so it is deliberately not done
+# here. The same version-mismatch risk therefore still applies on this path
+# when the vendor's version string is not one nginx.org ever published.
+
+# apt never refreshes its index on its own. On an image that has been sitting
+# unbooted for a while the cached index still names package files the mirror
+# has since rotated out of its pool, and the install below fails on a 404
+# rather than on anything that points at the real cause.
+- name: "Install | Updating the apt cache"
   apt:
-    update_cache: yes
-    
-- name: Installing nginx
+    update_cache: true
+
+# state: present, not latest: a re-run must leave the installed version alone.
+# The mod_security role that runs after this one compiles its nginx connector
+# against the version it finds on the host, and a module built against one
+# version is refused by another, so moving nginx underneath it turns a
+# repeat run of the installer into a broken web server. Upgrading is an
+# operator decision, not a side effect of running this role twice.
+- name: "Install | Installing nginx"
   apt:
     name: nginx
     state: present
+
+# Debian's postinst starts nginx, so this is normally a no-op. It is here so
+# the outcome the role promises comes from the role rather than from a
+# packaging side effect, and so a host whose unit was stopped or disabled by
+# hand is returned to the state the role claims to leave behind.
+- name: "Install | Enabling and starting the nginx service"
+  systemd:
+    name: nginx
+    enabled: true
+    state: started
+    daemon_reload: true

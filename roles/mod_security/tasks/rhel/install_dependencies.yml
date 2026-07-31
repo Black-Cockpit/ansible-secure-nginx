@@ -1,59 +1,92 @@
-# Update repository
-- name: Updating repositories
-  yum:
+# Phase two of the mod_security role on the Enterprise Linux family: installs
+# the compiler toolchain and the development headers both source builds need.
+#
+# Selected by target_platform, which pre_install.yml sets to "rhel" for CentOS,
+# RedHat, Rocky, AlmaLinux and OracleLinux alike. The package names themselves
+# are not here — they live in vars/packages/RedHat-<major>.yml, one file per EL
+# major version, so a package that exists in one release and not another is a
+# difference between two data files rather than a version comparison in this
+# one.
+#
+# What stays here is ordering, because three things have to happen before the
+# package set can resolve at all:
+#
+#   1. EPEL has to be configured, or libinjection-devel is not found on the
+#      releases whose file names it.
+#   2. CodeReady Builder / CRB has to be enabled from EL 9, or libmaxminddb-devel
+#      is not found.
+#   3. Only then can the bulk install run.
+#
+# Everything installed here is a build-time dependency. The post-install phase
+# removes gcc, make, automake and git again; the rest of "@Development Tools"
+# and every -devel package stay on the host.
+
+# Dependencies | Resolve the package set for this EL major version. The chain
+# tries the exact distribution first so a rebuild that ever needs its own list
+# can have packages/Rocky-10.yml, and falls back to the shared RedHat-<major>
+# file that every EL distribution uses today.
+- name: "Dependencies | Loading the package set for this release"
+  include_vars:
+    file: "{{ lookup('ansible.builtin.first_found', mod_security_package_set) }}"
+  vars:
+    mod_security_package_set:
+      files:
+      - "packages/{{ ansible_facts['distribution'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+      - "packages/{{ ansible_facts['os_family'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+      paths:
+      - "{{ role_path }}/vars"
+
+# Dependencies | Refresh the package metadata before anything is resolved
+# against it, so an image whose cached index predates the current mirror
+# contents does not fail the installs below on a missing package file.
+- name: "Dependencies | Updating the repositories"
+  dnf:
     update_cache: yes
-    enablerepo: epel-release
 
-# Install dependencies
-- name: Installing dependencies
+# Dependencies | Configure EPEL as its own step ahead of the bulk install. This
+# used to be the second entry of a single loop, which made the order of that
+# list load-bearing and undocumented: EPEL publishes libinjection-devel, so a
+# combined transaction would try to resolve that name before the repository
+# providing it existed. Installing it separately makes the dependency an
+# ordering the file states rather than one a reader has to infer.
+- name: "Dependencies | Installing the EPEL repository"
   dnf:
-    name: "{{ item }}"
+    name: epel-release
     state: installed
-    update_cache: true
-  loop:
-  - "@Development Tools"
-  - epel-release
-  - httpd-devel 
-  - pcre 
-  - pcre-devel
-  - libxml2 
-  - libxml2-devel
-  - curl 
-  - curl-devel
-  - openssl
-  - openssl-devel
-  - git
-  - yajl
-  - libinjection-devel
 
-# Install GeoIP packages (differs by OS major version)
-- name: Installing geoip-devel (RHEL < 9)
-  dnf:
-    name: geoip-devel
-    state: installed
-  when: ansible_distribution_major_version | int < 9
-
-- name: Enabling CodeReady Builder repository (RHEL >= 9)
+# Dependencies | Enable CodeReady Builder on subscribed Red Hat hosts, which is
+# where libmaxminddb-devel lives from EL 9. The repository is named per major
+# version and per architecture, so both are interpolated from facts rather than
+# hard-coded. changed_when is forced because subscription-manager reports
+# success identically whether it enabled the repository or found it already
+# enabled.
+- name: "Dependencies | Enabling the CodeReady Builder repository (RHEL)"
   command: >
     subscription-manager repos
-    --enable codeready-builder-for-rhel-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}-rpms
+    --enable codeready-builder-for-rhel-{{ ansible_facts['distribution_major_version'] }}-{{ ansible_facts['architecture'] }}-rpms
   when:
-  - ansible_distribution_major_version | int >= 9
-  - ansible_distribution == 'RedHat'
+  - mod_security_requires_crb
+  - ansible_facts['distribution'] == 'RedHat'
   changed_when: true
 
-- name: Enabling CRB repository (RHEL-based >= 9, non-RHEL)
+# Dependencies | Enable the same content on the rebuilds, where it ships as a
+# repository called "crb" that is present but disabled out of the box and there
+# is no subscription-manager to go through. The distribution test is against
+# RedHat rather than against a list, so a rebuild this role has not been named
+# for still takes this branch rather than none.
+- name: "Dependencies | Enabling the CRB repository (non-RHEL)"
   command: dnf config-manager --set-enabled crb
   when:
-  - ansible_distribution_major_version | int >= 9
-  - ansible_distribution != 'RedHat'
+  - mod_security_requires_crb
+  - ansible_facts['distribution'] != 'RedHat'
   changed_when: true
 
-- name: Installing libmaxminddb packages (RHEL >= 9)
+# Dependencies | Install the whole set in one transaction rather than looping a
+# package at a time, so dnf resolves the dependency graph once and a name that
+# does not exist is reported before anything is downloaded. "@Development Tools"
+# is a package group rather than a package and pulls in the compiler set the
+# post-install phase later removes.
+- name: "Dependencies | Installing the build requirements"
   dnf:
-    name: "{{ item }}"
+    name: "{{ mod_security_build_packages }}"
     state: installed
-  loop:
-  - libmaxminddb
-  - libmaxminddb-devel
-  when: ansible_distribution_major_version | int >= 9

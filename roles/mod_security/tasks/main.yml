@@ -1,23 +1,69 @@
-- name: Preparing environment
+# Entry point of the mod_security role: six phases that compile ModSecurity and
+# its nginx connector from source on the target host and wire the result into
+# the running nginx.
+#
+# The phases are ordered, and each one consumes what the previous one left
+# behind:
+#
+#   1. Pre Install   asserts the platform is supported and nginx is already
+#                    present, then sets source_dir and target_platform and
+#                    recreates the build tree.
+#   2. Dependencies  installs the compiler toolchain and the library headers
+#                    the two builds need.
+#   3. Install       builds and installs libmodsecurity into the build tree.
+#   4. Connector     builds the nginx module against the running nginx version
+#                    and sets nginx_modules_path.
+#   5. Rules         installs the rule set, reading unicode.mapping back out of
+#                    the build tree phase three populated.
+#   6. Post Install  removes the toolchain phase two installed.
+#
+# The include path in phase two interpolates target_platform, which is not a
+# value an operator supplies: pre_install.yml derives it from the distribution
+# fact with set_fact. Phase one therefore cannot be skipped, reordered, or run
+# in a separate play — the include below has no file name to resolve until it
+# has run, and the role default is an empty string so that failure is loud
+# rather than a silently wrong platform.
+#
+# Phases three to five all write into source_dir and read each other's output
+# there, so none of them stands alone against a host that has not been through
+# phase one in the same play.
+
+# Pre Install | Establish the preconditions and the facts every later phase
+# reads. This is also the only gate on the platform: nothing below re-checks
+# the distribution.
+- name: "Pre Install | Preparing the build environment"
   include_tasks:
     file: "common/pre_install.yml"
 
-- name: Installing requirements
+# Dependencies | Install the build requirements from the per-platform file
+# selected by target_platform. The two files install different package names
+# for the same libraries, which is why the split is by file rather than by
+# when: conditions inside one file.
+- name: "Dependencies | Installing the build requirements"
   include_tasks:
     file: "{{ target_platform }}/install_dependencies.yml"
 
-- name: Installing ModSecurity
+# Install | Build libmodsecurity itself. The connector phase below links
+# against what this phase installs, so the two cannot be reordered.
+- name: "Install | Installing ModSecurity"
   include_tasks:
     file: "common/install_mod_security.yml"
 
-- name: Installing ModSecurity nginx connector
+# Connector | Build the nginx module that lets nginx call into the library
+# installed above, and register it with the running nginx.
+- name: "Connector | Installing the ModSecurity nginx connector"
   include_tasks:
     file: "common/install_mod_security_nginx_connector.yml"
 
-- name: Installing ModeSecurity community rules
+# Rules | Install the recommended rule configuration. It copies
+# unicode.mapping out of the ModSecurity source tree, so it has to run while
+# that tree still exists.
+- name: "Rules | Installing the ModSecurity community rules"
   include_tasks:
     file: "common/install_community_rules.yml"
 
-- name: Cleaning environment
+# Post Install | Drop the compiler toolchain now that nothing else needs it.
+# Runs last because every phase above depends on it.
+- name: "Post Install | Cleaning the build environment"
   include_tasks:
     file: "common/post_install.yml"

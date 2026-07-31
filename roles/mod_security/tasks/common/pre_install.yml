@@ -1,60 +1,114 @@
-# Define build directory
-- set_fact:
+# Phase one of the mod_security role. Establishes that the host can be built
+# on at all, then leaves behind the two values every later phase depends on.
+#
+# Leaves set:
+#   source_dir       the build tree, derived from build_dir
+#   target_platform  "rhel" or "debian" — a directory name under tasks/ that
+#                    main.yml interpolates into an include path
+#
+# source_dir is deleted and recreated on every run, so the role is not
+# incremental: a second run re-downloads and recompiles everything from
+# scratch. Anything an operator left inside that directory is destroyed with
+# it, which is why it is a role-owned subdirectory of build_dir rather than
+# build_dir itself.
+#
+# The role installs no nginx of its own, on purpose. The connector built in a
+# later phase is compiled against the source of the nginx version already
+# running on the host, and a module built against one version is refused by
+# another. Installing nginx here would mean choosing the version the connector
+# is then locked to; that choice belongs to the install role, which runs first.
+
+# Pre Install | Derive the one directory the whole role builds in, so there is
+# a single place to write to and a single place to wipe. No other task reads
+# build_dir directly.
+- name: "Pre Install | Defining the build directory"
+  set_fact:
     source_dir: "{{ build_dir }}/modSecurity"
   changed_when: false
 
-# Gathering facts
-- name: Gathering package fact
+# Pre Install | Populate ansible_facts['packages']. No task in either role
+# reads that fact today, so this costs a package-manager query and produces
+# nothing; it is left in place because removing it changes what the role does
+# on the host, which this pass does not do.
+- name: "Pre Install | Gathering the installed package facts"
   package_facts:
     manager: auto
   changed_when: false
 
-# Check target platforms 
-- name: "Pre Audit | Check OS version and family"
+# Pre Audit | Refuse to build on a distribution the role has not been written
+# for. supported_distribution has to stay in step with the two target_platform
+# conditions below: a name accepted here that matches neither of them leaves
+# target_platform empty, and the failure then surfaces in main.yml as an
+# unresolvable include path instead of as an unsupported platform. Both
+# messages repeat the distribution and its major version because an assert
+# failure is otherwise identical across every host that tripped it.
+# Tagged always so the gate still runs when the play is filtered by tag.
+- name: "Pre Audit | Verifying the OS version and family are supported"
   assert:
     that:
-    - ansible_distribution in supported_distribution
-    fail_msg: "This role can only be run against Supported OSs. {{ ansible_distribution }} {{ ansible_distribution_major_version }} is not supported."
-    success_msg: "This role is running against a supported OS {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
+    - ansible_facts['distribution'] in supported_distribution
+    fail_msg: "This role can only be run against Supported OSs. {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }} is not supported."
+    success_msg: "This role is running against a supported OS {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}"
   changed_when: false
   tags:
   - always
 
-# Check if nginx is installed
-- name: Check if nginx is installed
+# Pre Audit | Probe for an nginx binary on PATH. A package query would answer a
+# different question: nginx may come from the distribution repository, from
+# nginx.org, or from a hand-built install, and the binary is the only thing
+# common to all three — and the only thing the version scrape in the connector
+# phase can read.
+- name: "Pre Audit | Checking whether nginx is installed"
   shell:
     cmd: command -v nginx 2>&1 >/dev/null && echo installed || echo not_installed
   register: is_nginx_installed
+  changed_when: false
 
-# Validate nginx installation
-- assert:
+# Pre Audit | Turn the probe above into a hard stop. This is not a condition
+# the role can recover from by installing nginx itself: whichever version it
+# picked would become the version the connector is compiled against and locked
+# to, so the decision is deliberately pushed back to the operator.
+- name: "Pre Audit | Validating the nginx installation"
+  assert:
     that:
     - is_nginx_installed.stdout == 'installed'
     fail_msg: "Nginx is not installed, please install nginx and retry again"
     success_msg: "OK"
   changed_when: false
 
-# Set rhel as a target
-- set_fact:
+# Pre Install | Point the dependency include at the Enterprise Linux task file.
+# The distributions are listed by name rather than tested through os_family
+# because os_family reports "RedHat" for every rebuild ever derived from it,
+# including ones whose package names the rhel file has never been run against.
+- name: "Pre Install | Selecting the Enterprise Linux dependency tasks"
+  set_fact:
     target_platform: rhel
-  when: ansible_distribution == 'CentOS' or ansible_os_family == 'RedHat' or ansible_os_family == "Rocky" or ansible_os_family == "AlmaLinux"
+  when: ansible_facts['distribution'] in
+        ['CentOS', 'RedHat', 'Rocky', 'AlmaLinux', 'OracleLinux']
   changed_when: false
 
-# Set debian as a target
-- set_fact:
+# Pre Install | Point the dependency include at the Debian task file. Listed by
+# name for the same reason as above: os_family reports "Debian" for every
+# derivative built on it.
+- name: "Pre Install | Selecting the Debian dependency tasks"
+  set_fact:
     target_platform: debian
-  when: ansible_distribution == 'Ubuntu' or ansible_os_family == 'Debian'
+  when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
   changed_when: false
 
-# Deleting source directory
-- name: Deleting source directory
+# Pre Install | Destroy whatever an earlier run left in the build tree. Reusing
+# it would be faster but not reproducible: a half-finished make from a run that
+# failed part way through would otherwise be picked up by the next one and
+# produce a build nobody can account for.
+- name: "Pre Install | Deleting the source directory"
   file:
     path: "{{ source_dir }}"
     state: absent
     force: yes
 
-# Creating source directory
-- name: Creating source directory
+# Pre Install | Recreate the empty build tree that the download, unarchive and
+# configure steps of the two build phases all chdir into.
+- name: "Pre Install | Creating the source directory"
   file:
     path: "{{ source_dir }}"
     state: directory

@@ -1,2 +1,16 @@
 ---
 # defaults file for install
+
+# Distributions the platform assertion in tasks/main.yml accepts. It has to
+# stay in step with the two dispatch conditions in that file — a name added
+# here without a matching dispatch condition brings back the silent no-op the
+# assertion exists to prevent — and with mod_security's list of the same name,
+# because the two roles are run back to back against the same host.
+supported_distribution:
+- CentOS
+- RedHat
+- Rocky
+- AlmaLinux
+- OracleLinux
+- Ubuntu
+- Debian

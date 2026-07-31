@@ -1,0 +1,47 @@
+# Build dependencies for Enterprise Linux 10: RHEL, CentOS, Rocky, AlmaLinux and
+# Oracle Linux alike, all of which report os_family RedHat.
+#
+# Carries the same GeoIP2 and CodeReady Builder / CRB story as EL 9, and two
+# further differences of its own: libinjection-devel and yajl are both absent
+# from this list.
+#
+# libinjection: EPEL 10 does not appear to publish it — it is packaged for EPEL
+# 7, 8 and 9 only. Nothing is lost by omitting it: ModSecurity vendors
+# libinjection at others/libinjection and the release tarball this role
+# downloads ships that source already populated, so the @detectSQLi and
+# @detectXSS operators still build.
+#
+# yajl: not shipped in EL 10 at all. Red Hat dropped it because upstream has
+# been unmaintained since 2015 and the last release carries CVE-2023-33460,
+# CVE-2022-24795 and CVE-2017-16516. It exists in AlmaLinux's devel repository
+# and in third-party repositories, but pulling an unmaintained library with open
+# CVEs out of a devel or third-party repository to build a security module is
+# the wrong trade, so it is simply left out. The consequence is that ModSecurity
+# builds without JSON request-body parsing on EL 10 — which is the same result
+# EL 8 and EL 9 already produce, because those lists install the yajl runtime
+# but never yajl-devel, so configure finds no headers there either.
+#
+# The EL 8 and EL 9 files keep both packages because they resolve there and that
+# is what those releases have always installed.
+#
+# zlib-devel is not a real package on EL 10 — the zlib-ng transition replaced it,
+# and zlib-ng-compat-devel carries "Provides: zlib-devel", so the name below
+# still resolves. It is named by the provide rather than by the providing package
+# so the same entry works whether a release ships zlib or zlib-ng.
+mod_security_requires_crb: true
+
+mod_security_build_packages:
+- "@Development Tools"
+- httpd-devel
+- pcre2
+- pcre2-devel
+- libxml2
+- libxml2-devel
+- curl
+- curl-devel
+- openssl
+- openssl-devel
+- git
+- libmaxminddb
+- libmaxminddb-devel
+- zlib-devel

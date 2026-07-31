@@ -1,14 +1,50 @@
 galaxy_info:
   author: Hasni Mehdi
   description: Nginx installer
-  company: Black Cockpit
+  company: Black Cockpit LLC
   license: MIT
-  min_ansible_version: 2.1
+  min_ansible_version: "2.15.8"
 
+  # One entry per distribution the dispatch in tasks/main.yml claims, and no
+  # others: an entry with no matching dispatch condition advertises a platform
+  # the role does nothing on. Enterprise Linux starts at 8 because the install
+  # goes through dnf and relies on module_hotfixes, neither of which exists on
+  # 7. Only Ubuntu 24.04 and AlmaLinux 10 are exercised by CI; the remaining
+  # entries share their package manager and repository layout with those two.
   platforms:
   - name: Ubuntu
     versions:
-    - all
+    - jammy
+    - noble
+  - name: Debian
+    versions:
+    - bullseye
+    - bookworm
+  - name: EL
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: CentOS
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: Rocky
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: AlmaLinux
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: OracleLinux
+    versions:
+    - "8"
+    - "9"
+    - "10"
 
   galaxy_tags:
   - nginx
