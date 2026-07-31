@@ -1,37 +1,83 @@
-# Clone ModSecurity nginx connector
-- name: Cloning ModeSecurity nginx connector
+# Phase four of the mod_security role: builds the nginx connector module and
+# registers it with the nginx already installed on the host.
+#
+# The connector is a dynamic nginx module, and nginx will only load a module
+# built from the source of the exact version it is itself running. That is why
+# the version is scraped out of "nginx -v" here instead of being pinned in a
+# variable: a pinned version would drift from the host's package the first time
+# anyone upgraded nginx, and the mismatch surfaces as nginx refusing to start.
+# The install role installs nginx with state: present rather than latest for
+# the same reason.
+#
+# --with-compat on the configure line is what makes that build loadable at all.
+# It compiles the module against the stable module ABI, so a module built here
+# from a plain source tree is accepted by a distribution binary that was
+# configured with an entirely different set of flags. Without it nginx rejects
+# the module for a signature mismatch.
+#
+# The modules directory is scraped out of "nginx -V" rather than hard-coded
+# because it varies by packaging — /usr/lib/nginx/modules on Debian,
+# /usr/lib64/nginx/modules on Enterprise Linux, and elsewhere again on a
+# hand-built nginx.
+#
+# Known gap: this file makes nginx load the module, and the rules phase writes
+# a rule configuration, but nothing in this role ever emits "modsecurity on;"
+# into an http, server or location block. The module is therefore loaded and
+# configured but not switched on for any traffic. Turning it on is left to the
+# operator's own site configuration.
+
+# Connector | Clone the connector source. Cloned rather than downloaded as a
+# release tarball because upstream publishes the connector by branch, and
+# pinned to a single commit of history (depth: 1) since nothing here reads the
+# log — this keeps the transfer small on hosts with slow links.
+- name: "Connector | Cloning the ModSecurity nginx connector"
   git:
     repo: https://github.com/SpiderLabs/ModSecurity-nginx.git
     dest: "{{ source_dir }}/ModSecurity-nginx"
     depth: 1
 
-# Extrat nginx current version
-- name: Extrating nginx version
+# Connector | Read the running nginx version. "nginx -v" writes to stderr, so
+# the redirect is not decoration; the grep reduces the banner line to the bare
+# version number.
+- name: "Connector | Extracting the nginx version"
   shell:
     cmd: nginx -v 2>&1 | grep -Eo '[0-9.]*'
   register: current_nginx
+  changed_when: false
 
-# Extract nginx version
-- set_fact:
+# Connector | Keep only the leading version number from the scrape, so a banner
+# that carries anything after it cannot end up inside the download URL built
+# from this value below.
+- name: "Connector | Defining the nginx version"
+  set_fact:
     nginx_version: "{{ current_nginx.stdout | regex_search('[0-9.]*') }}"
   changed_when: false
 
-# Download nginx source
-- name: "Downloading nginx {{ nginx_version }}"
+# Connector | Fetch the source tarball for exactly that version from nginx.org.
+# This is the step that fails when the host runs a vendor build whose version
+# string upstream never published, which is why the install role takes its
+# Enterprise Linux packages from nginx.org.
+- name: "Connector | Downloading nginx {{ nginx_version }}"
   get_url:
     url: "http://nginx.org/download/nginx-{{ nginx_version }}.tar.gz"
     dest: "{{ source_dir }}"
     force: yes
 
-# Extract nginx
-- name: "Extracting nginx {{ nginx_version }}"
+# Connector | Unpack the nginx source. Only its build system is wanted here —
+# the module is compiled inside this tree, but nginx itself is never installed
+# from it.
+- name: "Connector | Extracting nginx {{ nginx_version }}"
   unarchive:
     src: "{{ source_dir }}/nginx-{{ nginx_version }}.tar.gz"
     dest: "{{ source_dir }}"
     remote_src: yes
 
-# Configure nginx module for compilation
-- name: "Configuring nginx module"
+# Connector | Configure the nginx source tree for a dynamic module build.
+# --with-compat is the load-bearing flag: it builds against the stable module
+# ABI so the running nginx accepts a module that was not compiled alongside it.
+# The relative path to the connector holds because the clone above landed
+# beside this tree in source_dir.
+- name: "Connector | Configuring the nginx module"
   command:
     argv:
       - "./configure"
@@ -39,8 +85,10 @@
       - "--add-dynamic-module=../ModSecurity-nginx"
     chdir: "{{ source_dir }}/nginx-{{ nginx_version }}"
 
-# Make nginx module
-- name: "Making nginx ModeSecurity connector module"
+# Connector | Build the modules target only, one job per core. Building the
+# full default target would produce an nginx binary that nothing installs and
+# cost several minutes for nothing.
+- name: "Connector | Making the nginx ModSecurity connector module"
   command:
     argv:
       - "make"
@@ -48,29 +96,42 @@
       - "modules"
     chdir: "{{ source_dir }}/nginx-{{ nginx_version }}"
 
-# Extract nginx module path
-- name: "Extracting nginx module path"
+# Connector | Recover the modules directory this nginx was compiled to look in.
+# "nginx -V" prints the whole configure line on stderr as one long string; the
+# sed splits it on " --" so each flag lands on its own line, the grep picks the
+# modules-path flag, the awk takes the value after "=", and the final sed drops
+# the whitespace the split left behind.
+- name: "Connector | Extracting the nginx module path"
   shell:
     cmd: |
       build_config=$(command -v nginx &> /dev/null && nginx -V 2>&1)
       echo "$build_config" | sed -e 's@\s--@\n@g' | grep modules-path | awk -F '=' '{print $2}' | sed -e 's@\s@@g'
   register: nginx_module_path_extration
+  changed_when: false
 
-# Check if nginx modules path is extracted
-- name: "Checkinf nginx module path"
+# Connector | Stop if the scrape came back empty. An nginx built without
+# --modules-path prints no such flag, and an empty value would otherwise be
+# used as a directory path below — creating "/" as a directory and copying the
+# module to the filesystem root.
+- name: "Connector | Checking the nginx module path"
   assert:
     that:
       - nginx_module_path_extration.stdout != ''
     fail_msg: "Failed to identify nginx modules path"
     success_msg: "OK"
+  changed_when: false
 
-# Define nginx modules path
-- set_fact:
+# Connector | Promote the scraped path to a fact, so the tasks below and any
+# later phase read one value rather than re-parsing the command output.
+- name: "Connector | Defining the nginx modules path"
+  set_fact:
     nginx_modules_path: "{{ nginx_module_path_extration.stdout }}"
   changed_when: false
 
-# Create modules directory if it does not exists
-- name: Creating module directory
+# Connector | Create the modules directory. nginx names the path in its build
+# configuration whether or not the package created it, so on a host that has
+# never had a dynamic module installed the directory is genuinely absent.
+- name: "Connector | Creating the module directory"
   file:
     path: "{{ nginx_modules_path }}"
     state: directory
@@ -78,8 +139,10 @@
     owner: root
     group: root
 
-# Copy ModeSecurity to modules directory
-- name: "Copying ModeSecurity nginx library"
+# Connector | Install the compiled module where nginx looks for it. The source
+# path is the objs/ directory of the nginx tree the module was built in, and
+# remote_src is set because both ends of the copy are on the target host.
+- name: "Connector | Copying the ModSecurity nginx library"
   copy:
     src: "{{ source_dir }}/nginx-{{ nginx_version }}/objs/ngx_http_modsecurity_module.so"
     dest: "{{ nginx_modules_path }}"
@@ -89,17 +152,20 @@
     force: true
     remote_src: yes
 
-# Create nginx extra modules directory
-- name: Creating nginx extra modules directory
+# Connector | Create the drop-in directory this role owns. Keeping the role's
+# additions in their own directory is what lets the single include line added
+# to nginx.conf below stand in for every file the role writes.
+- name: "Connector | Creating the nginx extra modules directory"
   file:
-     path: "/etc/nginx/extras"
-     state: directory
-     mode: "0755"
-     owner: root
-     group: root
+    path: "/etc/nginx/extras"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
 
-# Copy ModeSecurity module configuration
-- name: Copy ModeSecurity module configuration
+# Connector | Write the load_module directive that pulls the module in, with
+# the modules path scraped above filled into the template.
+- name: "Connector | Copying the ModSecurity module configuration"
   template:
     src: "templates/etc/nginx/extras/mod-http-modsecurity.conf.j2"
     dest: "/etc/nginx/extras/mod-http-modsecurity.conf"
@@ -107,8 +173,14 @@
     owner: root
     group: root
 
-# Update nginx configuration
-- name: Updating nginx configuration
+# Connector | Include the drop-in directory from the main configuration.
+# insertbefore anchors on the events block because load_module is only valid in
+# nginx's main context — the part of nginx.conf above events — and nginx
+# rejects the directive outright anywhere else. Anchoring on the first
+# top-level block rather than appending is what keeps the include in that
+# context. state: present makes the line idempotent, so a re-run does not stack
+# duplicate includes.
+- name: "Connector | Updating the nginx configuration"
   lineinfile:
     path: "/etc/nginx/nginx.conf"
     line: |

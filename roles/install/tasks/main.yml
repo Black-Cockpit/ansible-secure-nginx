@@ -1,3 +1,49 @@
-- include_tasks:
+# Entry point of the install role: reject unsupported platforms, then hand the
+# run over to the task file that knows the target's package manager.
+#
+# Contract: every distribution listed in supported_distribution is claimed by
+# exactly one of the two dispatch conditions below. A distribution that reaches
+# the dispatch without matching either condition would leave the role reporting
+# "ok" having installed nothing, and the failure would only surface later, in
+# the mod_security role's "nginx is installed" precondition. The assertion is
+# what turns that silent no-op into a failure on the host that caused it.
+
+# The accepted list is a role default rather than a literal here, so an
+# operator can widen it for a derivative without editing the role. Widening it
+# is only half the job: the new name also needs a dispatch condition below, or
+# it passes this gate and then matches nothing. Both messages repeat the
+# distribution and its major version because an assert failure is otherwise
+# identical across every host in the inventory that tripped it.
+- name: "Install | Verifying the platform is supported"
+  assert:
+    that:
+    - ansible_facts['distribution'] in supported_distribution
+    fail_msg: >-
+      This role can only be run against Supported OSs.
+      {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_major_version'] }} is not supported.
+    success_msg: >-
+      This role is running against a supported OS
+      {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_major_version'] }}
+  changed_when: false
+
+# Hands the run to the apt path. The two names are spelled out instead of
+# testing ansible_facts['os_family'], which reports "Debian" for every
+# derivative ever built on it — including ones whose archive layout the path
+# below has never been run against. Naming them keeps the role's claim and the
+# role's coverage the same set.
+- name: "Install | Dispatching the Debian family tasks"
+  include_tasks:
     file: "debian.yml"
-  when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+  when: ansible_facts['distribution'] in ['Debian', 'Ubuntu']
+
+# Hands the run to the dnf path. Explicit for the same reason, with a sharper
+# edge on this family: os_family reports "RedHat" for every rebuild, and the
+# nginx.org repository the path below configures is indexed by the EL major
+# version, which not every rebuild's $releasever expands to.
+- name: "Install | Dispatching the Enterprise Linux family tasks"
+  include_tasks:
+    file: "rhel.yml"
+  when: ansible_facts['distribution'] in
+        ['CentOS', 'RedHat', 'Rocky', 'AlmaLinux', 'OracleLinux']

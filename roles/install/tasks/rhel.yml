@@ -1,0 +1,66 @@
+# Installs nginx on the Enterprise Linux family from the official nginx.org
+# stable repository instead of the distribution's AppStream build.
+#
+# The mod_security role compiles its nginx connector against the source tarball
+# for the running version, fetched from nginx.org by version number. Vendor
+# builds carry patch suffixes and, on the rebuilds, versions that never shipped
+# upstream, so there is no tarball to match them and the connector build fails.
+# Taking the binary from the same origin as the source keeps the two in step.
+#
+# The Debian path deliberately does not do this: it still installs the
+# distribution package, because changing it would replace the nginx build on
+# every host already running that path.
+
+# module_hotfixes=true is mandatory from EL 8 onwards. DNF's modular filtering
+# hides any package whose name matches an enabled module stream, and nginx is
+# an AppStream module — without this flag the nginx.org packages are invisible
+# to the depsolver and the install below resolves back to the vendor build
+# without reporting anything unusual.
+#
+# gpgcheck=1 against the upstream signing key is the reason for configuring a
+# repository at all rather than handing dnf a package URL: signature checking
+# is what makes the source trusted, and it also covers later upgrades.
+#
+# $releasever expands from the release package, so its value is the vendor's,
+# not the EL major version, on distributions that version themselves
+# differently — Oracle Linux above all. Confirm the URL this produces on such a
+# host before treating it as supported.
+- name: "Install | Configuring the official nginx stable repository"
+  copy:
+    dest: /etc/yum.repos.d/nginx.repo
+    content: |
+      [nginx-stable]
+      name=nginx stable repo
+      baseurl=https://nginx.org/packages/centos/$releasever/$basearch/
+      gpgcheck=1
+      enabled=1
+      gpgkey=https://nginx.org/keys/nginx_signing.key
+      module_hotfixes=true
+    owner: root
+    group: root
+    mode: "0644"
+
+# state: present, not latest: a re-run must not upgrade nginx underneath a
+# mod_security connector that was compiled against the version currently
+# installed. Upgrading is an operator decision, not a side effect of running
+# the installer again.
+#
+# The module's action plugin resolves the dnf4 or dnf5 backend from the
+# target's pkg_mgr fact, so EL 10 needs no branch here. It has no yum backend,
+# which is consistent with the EL 8 floor this role advertises.
+- name: "Install | Installing nginx"
+  dnf:
+    name: nginx
+    state: present
+    update_cache: true
+
+# The nginx.org package ships no systemd preset, so the unit is installed
+# inactive and disabled: without this step the role finishes with a host that
+# has nginx on disk and nothing listening, and the mod_security role that runs
+# next configures a service nobody started.
+- name: "Install | Enabling and starting the nginx service"
+  systemd:
+    name: nginx
+    enabled: true
+    state: started
+    daemon_reload: true

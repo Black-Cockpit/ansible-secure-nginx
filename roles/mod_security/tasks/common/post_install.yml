@@ -1,5 +1,29 @@
-# Remove compiler
-- name: "Removing compiler"
+# Phase six of the mod_security role: removes the build toolchain now that
+# both source builds have finished.
+#
+# The role compiles ModSecurity and its nginx connector on the target host,
+# which means a machine that is meant to run a web server ends up with a
+# compiler, a build system and a version control client on it. Removing them
+# again takes that back off the host, so a foothold in nginx does not also hand
+# over the tools to build whatever comes next.
+#
+# Two consequences a reader should know before running this role:
+#
+#   * The removal is unconditional and does not check whether the host had
+#     these packages before the role ran. gcc, make, automake and git are
+#     removed whether the role installed them or the operator did, so anything
+#     unrelated on the host that depended on them — configuration management
+#     that clones from git, a language runtime that builds native extensions —
+#     breaks after the first run. git is by far the most likely to matter.
+#   * A re-run reinstalls all four in the dependencies phase and removes them
+#     again here, so the role is not idempotent in the reporting sense: every
+#     run reports changes on this host even when nothing about the WAF changed.
+
+# Post Install | Remove the four toolchain packages by name. This is narrower
+# than what the dependencies phase installed: on Enterprise Linux that phase
+# pulls in the whole "@Development Tools" group, and the rest of that group
+# stays on the host.
+- name: "Post Install | Removing the build toolchain"
   package:
     name: "{{ item }}"
     state: absent

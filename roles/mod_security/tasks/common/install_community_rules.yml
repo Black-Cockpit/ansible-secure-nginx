@@ -1,12 +1,40 @@
-# Create WAF rules directory
-- name: Creating rule directory /etc/nginx/waf_rules
+# Phase five of the mod_security role: lays down the WAF rule configuration
+# under /etc/nginx/waf_rules and points the engine at it.
+#
+# Ordering: the unicode.mapping copy below reads out of
+# "{{ source_dir }}/modsecurity-v{{ module_version }}", the tree the install
+# phase unpacked, so this file has to run after that phase and while the tree
+# is still on disk. pre_install.yml wipes that tree at the start of every run,
+# so this file has nothing to copy from if it is run on its own against a host
+# whose previous run has already finished.
+#
+# What arms the engine is the SecRuleEngine rewrite: upstream's recommended
+# configuration ships "SecRuleEngine DetectionOnly", which inspects traffic and
+# logs but blocks nothing, and this file rewrites it to "On". Note that the
+# rewrite is unconditional — detection_only does not gate it. What
+# detection_only gates is the SecDefaultAction line at the end of this file,
+# which is what turns a rule match into a 403 rather than a log entry.
+#
+# The engine is still not switched on for any traffic by this role: no
+# "modsecurity on;" directive is emitted into any nginx context. Everything
+# here configures a rule set that the operator's own site configuration has to
+# enable.
+
+# Rules | Create the directory every file this phase writes lives in. It is
+# also the directory main.conf includes from, so the path is fixed rather than
+# configurable.
+- name: "Rules | Creating the rule directory /etc/nginx/waf_rules"
   file:
     path: "/etc/nginx/waf_rules"
     state: directory
     recurse: yes
 
-# Create ModeSecurity audit log directory
-- name: Creating ModeSecurity audit log directory
+# Rules | Create the audit log tree ahead of the SecAuditLogStorageDir rewrite
+# below, which names it. ModSecurity does not create the directory itself and
+# fails to start when it is missing. Mode 0700 keeps the recorded request
+# bodies — which routinely contain credentials and session tokens — off every
+# account but root.
+- name: "Rules | Creating the ModSecurity audit log directory"
   file:
     path: "/var/log/mod_security/audit"
     mode: "0700"
@@ -15,8 +43,11 @@
     state: directory
     recurse: true
 
-# Download community rules
-- name: Downloading community rules
+# Rules | Fetch upstream's recommended configuration, which is the base every
+# rewrite below edits. It is taken from the v3/master branch rather than from
+# the release matching module_version, so its contents can change under a host
+# without module_version moving.
+- name: "Rules | Downloading the community rules"
   get_url:
     url: "https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/modsecurity.conf-recommended"
     dest: "/etc/nginx/waf_rules/modsecurity.conf"
@@ -25,8 +56,11 @@
     group: root
     force: true
 
-# Copy mapping
-- name: Copying ModeSecurity unicode mapping
+# Rules | Install the character mapping the transformation rules need. It is
+# copied out of the source tree rather than downloaded because it has to match
+# the library version that was built, and this is the task that makes the whole
+# phase depend on that tree still existing.
+- name: "Rules | Copying the ModSecurity unicode mapping"
   copy:
     src: "{{ source_dir }}/modsecurity-v{{ module_version }}/unicode.mapping"
     dest: "/etc/nginx/waf_rules/"
@@ -36,29 +70,40 @@
     group: root
     force: true
 
-# Enforce rules
-- name: Enabling ModeSecurity engine
+# Rules | Arm the engine. The anchored regexp matches only upstream's shipped
+# default, so an operator who has since set the directive to anything else
+# keeps their value and the line is appended rather than replaced — which is
+# also why a re-run against an already-armed host is a no-op.
+- name: "Rules | Enabling the ModSecurity engine"
   lineinfile:
     path: "/etc/nginx/waf_rules/modsecurity.conf"
     regexp: "^SecRuleEngine DetectionOnly$"
     line: "SecRuleEngine On"
 
-# Update ModeSecurity audit log directory
-- name: Updating ModeSecurity audit log directory
+# Rules | Repoint the audit log directory at the tree created above. The
+# optional leading hashes in the pattern mean this also matches the commented
+# form upstream ships, so the directive is uncommented and rewritten in one
+# pass.
+- name: "Rules | Updating the ModSecurity audit log directory"
   replace:
     path: "/etc/nginx/waf_rules/modsecurity.conf"
     regexp: '[#]{0,}(SecAuditLogStorageDir)\s.+$'
     replace: "SecAuditLogStorageDir /var/log/mod_security/audit"
 
-# Update ModeSecurity audit log file
-- name: Updating ModeSecurity audit log file
+# Rules | Repoint the audit log file into the same tree. The pattern is a
+# prefix of the one above, so this task has to stay after it: run the other way
+# round, this would also rewrite the SecAuditLogStorageDir line.
+- name: "Rules | Updating the ModSecurity audit log file"
   replace:
     path: "/etc/nginx/waf_rules/modsecurity.conf"
     regexp: '[#]{0,}(SecAuditLog)\s.+$'
     replace: "SecAuditLog /var/log/mod_security/audit/modsec_audit.log"
 
-# Update ModeSecurity action response
-- name: "Updating ModeSecurity action response"
+# Rules | Append the action a matching rule takes. This is what makes the WAF
+# block rather than observe: without it the armed engine evaluates every rule
+# and lets the request through. Skipped when detection_only is true, which is
+# the only thing that variable controls.
+- name: "Rules | Updating the ModSecurity action response"
   lineinfile:
     state: present
     insertafter: EOF
@@ -66,8 +111,10 @@
     line: "SecDefaultAction \"phase:2,log,auditlog,deny,status:403,tag:'ATTACK_REJECTED'\""
   when: not detection_only
 
-# Copy main WAF rules
-- name: "Copying ModeSecurity main configuration"
+# Rules | Install the role's own entry point, which includes the configuration
+# assembled above. Nothing in this role includes main.conf in turn — an
+# operator's site configuration points ModSecurity at this file.
+- name: "Rules | Copying the ModSecurity main configuration"
   copy:
     src: "./files/main.conf"
     dest: "/etc/nginx/waf_rules/main.conf"

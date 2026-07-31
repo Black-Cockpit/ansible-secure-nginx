@@ -1,0 +1,409 @@
+# Verification: assert that the install and mod_security roles left the host
+# in the state they promise.
+#
+# The assertions are structural. They check that the packages are installed,
+# that the module the roles compiled is on disk and registered with nginx,
+# that the configuration nginx would load actually parses, that the rule set
+# is in place and armed, that the build toolchain is gone again, and that
+# nginx runs with the module. Every one of them is derived from something a
+# role does, so a failure names a role and not a guess about nginx.
+#
+# What is deliberately not asserted: nothing here sends a request through the
+# WAF. That is not an oversight and not a shortcut. The mod_security role
+# loads the module and writes the rule files, but never emits
+# "modsecurity on;" into an nginx http, server or location context, so the
+# engine inspects no traffic on a host the roles have configured exactly as
+# designed. An "attack payload returns 403" assertion would therefore fail
+# against a correct run, and weakening it until it passed would assert
+# nothing. The gap is recorded in ../README.md and belongs with whatever
+# change switches the WAF on.
+#
+# Every task below is read-only and carries changed_when: false, with one
+# exception: the harness restarts nginx before the service assertions. The
+# comment on that task explains what it is compensating for.
+#
+# Ordering that matters:
+#   * The modules path is scraped before the two assertions that use it.
+#   * The package facts are gathered once, at the top, and read again by the
+#     toolchain-removal assertion at the bottom. Nothing between the two
+#     touches a package, so one gather serves both.
+#   * The configuration test runs before the restart, so a broken
+#     configuration is reported as a broken configuration rather than as a
+#     service that would not come back up.
+#
+# Expected extra-vars (supplied by run.sh from the platforms.yml entry):
+#   entry_name      matrix entry name, used in the assertion messages
+#   detection_only  the mode install.yml ran mod_security in, which decides
+#                   whether the blocking-action assertion applies
+- name: "Verify {{ entry_name }}"
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    # Mirrors the mod_security role default. run.sh forwards the entry's
+    # setting as an extra-var, which outranks this; the value is here so the
+    # play still runs when it is invoked by hand.
+    detection_only: false
+    # The four packages the mod_security role's post-install phase removes by
+    # name. It removes them whether or not it installed them, so their
+    # absence is the whole of what that phase promises.
+    build_toolchain_packages:
+      - gcc
+      - make
+      - automake
+      - git
+
+  tasks:
+    # Installation | Read the nginx banner. The command module fails the task
+    # on a non-zero exit status, so this task is itself the "nginx -v exits
+    # 0" check; the assertion below covers what it printed. The banner goes
+    # to stderr, which is where the version is read from.
+    - name: "Installation | Reading the nginx version banner"
+      command: nginx -v
+      register: nginx_version_banner
+      changed_when: false
+
+    # Installation | Confirm the binary that answered is nginx. A host with
+    # something else called nginx on PATH would satisfy the exit status and
+    # nothing else, and the connector build in the role scrapes this same
+    # banner for the version it downloads sources for.
+    - name: "Installation | Verifying nginx reports a version"
+      assert:
+        that:
+          - 'nginx_version_banner.stderr is search("nginx version: nginx/[0-9]+\.[0-9]+")'
+        fail_msg: >-
+          nginx -v did not report a version on {{ entry_name }}:
+          {{ nginx_version_banner.stderr | trim }}
+        success_msg: >-
+          {{ entry_name }} runs {{ nginx_version_banner.stderr | trim }}
+      changed_when: false
+
+    # Installation | Populate ansible_facts['packages'] once, for the
+    # assertion below and for the toolchain-removal one at the end of the
+    # play. Reading the package database asks a different question from
+    # "nginx -v worked": it is what distinguishes a managed install from a
+    # binary someone left on PATH.
+    - name: "Installation | Gathering the installed package facts"
+      package_facts:
+        manager: auto
+      changed_when: false
+
+    # Installation | Verify the install role went through the package
+    # manager. The package is called nginx on both paths the role takes —
+    # the distribution package on Debian and Ubuntu, the nginx.org package on
+    # Enterprise Linux — so one name covers the whole matrix.
+    - name: "Installation | Verifying the nginx package is installed"
+      assert:
+        that:
+          - "'nginx' in ansible_facts['packages']"
+        fail_msg: >-
+          the nginx package is not installed on {{ entry_name }}, so the
+          install role did not complete its package step
+        success_msg: >-
+          nginx is installed from a package on {{ entry_name }}
+      changed_when: false
+
+    # Module | Recover the directory this nginx was compiled to load modules
+    # from. It is scraped rather than assumed because it varies by packaging
+    # — /usr/lib/nginx/modules on Debian, /usr/lib64/nginx/modules on the
+    # Enterprise Linux packages — and because the role installs the module by
+    # the same scrape: hard-coding a path here would test the harness's guess
+    # instead of the role's behaviour. The sed splits the configure line on
+    # " --" so each flag lands on its own line, the awk takes the value after
+    # the "=", and the final sed strips the whitespace the split left behind.
+    - name: "Module | Extracting the nginx modules path"
+      shell:
+        cmd: |
+          nginx -V 2>&1 | sed -e 's@\s--@\n@g' | grep modules-path | awk -F '=' '{print $2}' | sed -e 's@\s@@g'
+      register: nginx_modules_path_scrape
+      changed_when: false
+
+    # Module | Promote the scrape to a fact, so the two assertions that need
+    # the path read one value rather than re-parsing the command output.
+    - name: "Module | Defining the nginx modules path"
+      set_fact:
+        nginx_modules_path: "{{ nginx_modules_path_scrape.stdout }}"
+      changed_when: false
+
+    # Module | Look for the compiled connector where nginx expects it.
+    - name: "Module | Checking the ModSecurity connector module"
+      stat:
+        path: "{{ nginx_modules_path }}/ngx_http_modsecurity_module.so"
+      register: connector_module_file
+      changed_when: false
+
+    # Module | Verify the connector was built and installed. The size check
+    # is not padding: a connector build that failed after creating its output
+    # file leaves a zero-length .so behind, and nginx reports that as a
+    # missing symbol rather than as an empty file.
+    - name: "Module | Verifying the connector module was installed"
+      assert:
+        that:
+          - (nginx_modules_path | length) > 0
+          - connector_module_file.stat.exists
+          - (connector_module_file.stat.size | default(0)) > 0
+        fail_msg: >-
+          {{ nginx_modules_path | default('(no modules path)') }}/ngx_http_modsecurity_module.so
+          is missing or empty on {{ entry_name }}, so the connector build in
+          the mod_security role did not produce a module
+        success_msg: >-
+          the connector module is installed in {{ nginx_modules_path }} on
+          {{ entry_name }}
+      changed_when: false
+
+    # Module | Read the drop-in the role writes from its template. It is the
+    # only thing that makes the compiled module reachable from nginx, so a
+    # missing file here fails this read task with the path in the message.
+    - name: "Module | Reading the ModSecurity load_module drop-in"
+      slurp:
+        src: "/etc/nginx/extras/mod-http-modsecurity.conf"
+      register: modsecurity_drop_in
+      changed_when: false
+
+    # Module | Verify the drop-in names the module that was actually
+    # installed. Matching the scraped path rather than the file name alone is
+    # what catches a load_module pointing somewhere nginx never looks, which
+    # is the failure mode when the modules-path scrape returns one value at
+    # install time and another here.
+    - name: "Module | Verifying the drop-in loads the installed module"
+      assert:
+        that:
+          - '(modsecurity_drop_in["content"] | b64decode) is search("load_module\s+" ~ nginx_modules_path ~ "/ngx_http_modsecurity_module\.so;")'
+        fail_msg: >-
+          /etc/nginx/extras/mod-http-modsecurity.conf on {{ entry_name }} does
+          not load {{ nginx_modules_path }}/ngx_http_modsecurity_module.so
+        success_msg: >-
+          the drop-in loads the installed connector module on {{ entry_name }}
+      changed_when: false
+
+    # Module | Find the line number of the include the role adds to
+    # nginx.conf. awk is used rather than grep because it reports the line
+    # number without a pipeline, and because it exits 0 when nothing matched
+    # — an empty result is the assertion's business, not the task's.
+    - name: "Module | Locating the extras include in nginx.conf"
+      shell:
+        cmd: |
+          awk '/^[[:blank:]]*include[[:blank:]]+\/etc\/nginx\/extras\/[*][.]conf;/ {print NR; exit}' /etc/nginx/nginx.conf
+      register: nginx_conf_extras_include_line
+      changed_when: false
+
+    # Module | Find the line number the first top-level block starts on. This
+    # is the boundary the include has to sit above: load_module is only valid
+    # in nginx's main context, which is everything before the events block,
+    # and nginx rejects the directive outright anywhere else.
+    - name: "Module | Locating the events block in nginx.conf"
+      shell:
+        cmd: |
+          awk '/^[[:blank:]]*events[[:blank:]]*[{]/ {print NR; exit}' /etc/nginx/nginx.conf
+      register: nginx_conf_events_line
+      changed_when: false
+
+    # Module | Verify the include is present and in the main context. Both
+    # halves matter: an include that landed after the events block parses as
+    # a configuration error the moment the drop-in is read, and an include
+    # that is missing altogether leaves a module on disk that nginx never
+    # hears about.
+    - name: "Module | Verifying the extras include precedes the events block"
+      assert:
+        that:
+          - (nginx_conf_extras_include_line.stdout | length) > 0
+          - (nginx_conf_events_line.stdout | length) > 0
+          - (nginx_conf_extras_include_line.stdout | int) < (nginx_conf_events_line.stdout | int)
+        fail_msg: >-
+          /etc/nginx/nginx.conf on {{ entry_name }} does not include
+          /etc/nginx/extras/*.conf in the main context (include line
+          {{ nginx_conf_extras_include_line.stdout | default('none', true) }},
+          events line {{ nginx_conf_events_line.stdout | default('none', true) }})
+        success_msg: >-
+          the extras include sits in the main context on {{ entry_name }}
+      changed_when: false
+
+    # Module | Ask nginx to parse the configuration it would start with.
+    # failed_when is disabled so the assertion below reports the failure with
+    # nginx's own diagnostic attached, rather than the task failing with a
+    # generic non-zero exit status.
+    - name: "Module | Testing the nginx configuration"
+      command: nginx -t
+      register: nginx_config_test
+      changed_when: false
+      failed_when: false
+
+    # Module | The load-bearing assertion of this play. Everything above
+    # proves files are where they should be; this one proves the running
+    # binary accepts the module those files describe. A connector compiled
+    # against a different nginx version, or compiled without --with-compat,
+    # produces exactly this failure and nothing earlier catches it.
+    - name: "Module | Verifying the nginx configuration parses"
+      assert:
+        that:
+          - nginx_config_test.rc == 0
+        fail_msg: >-
+          nginx -t failed on {{ entry_name }}, so the running nginx cannot
+          load the module the role built: {{ nginx_config_test.stderr | trim }}
+        success_msg: >-
+          nginx accepts the configuration and the module on {{ entry_name }}
+      changed_when: false
+
+    # Rules | Read the rule configuration the role downloads and rewrites.
+    # Three separate assertions read it, so it is decoded once below.
+    - name: "Rules | Reading the ModSecurity rule configuration"
+      slurp:
+        src: "/etc/nginx/waf_rules/modsecurity.conf"
+      register: modsecurity_rules
+      changed_when: false
+
+    # Rules | Decode the file once. Every assertion below matches against
+    # this text.
+    - name: "Rules | Decoding the ModSecurity rule configuration"
+      set_fact:
+        modsecurity_conf: "{{ modsecurity_rules['content'] | b64decode }}"
+      changed_when: false
+
+    # Rules | Verify the engine is armed. Upstream's recommended
+    # configuration ships "SecRuleEngine DetectionOnly", which evaluates
+    # rules and logs but never acts on them; the role rewrites that line, and
+    # this is the assertion that the rewrite matched. It is unconditional
+    # because the rewrite is unconditional — detection_only does not gate it.
+    - name: "Rules | Verifying the ModSecurity engine is enabled"
+      assert:
+        that:
+          - 'modsecurity_conf is search("^SecRuleEngine\s+On", multiline=True)'
+        fail_msg: >-
+          /etc/nginx/waf_rules/modsecurity.conf on {{ entry_name }} does not
+          set SecRuleEngine On, so the rule set would be loaded and inert
+        success_msg: >-
+          the ModSecurity engine is armed on {{ entry_name }}
+      changed_when: false
+
+    # Rules | Verify the audit log was repointed at the directory the role
+    # creates. Upstream ships this directive commented out and pointing
+    # elsewhere, and ModSecurity refuses to start when the directory it names
+    # does not exist, so the two have to agree.
+    - name: "Rules | Verifying the ModSecurity audit log directory"
+      assert:
+        that:
+          - 'modsecurity_conf is search("^SecAuditLogStorageDir\s+/var/log/mod_security/audit\s*$", multiline=True)'
+        fail_msg: >-
+          /etc/nginx/waf_rules/modsecurity.conf on {{ entry_name }} does not
+          set SecAuditLogStorageDir to /var/log/mod_security/audit
+        success_msg: >-
+          the audit log directory is set on {{ entry_name }}
+      changed_when: false
+
+    # Rules | Verify a rule match is answered with a 403. This is the one
+    # assertion the matrix can switch off: the role appends the
+    # SecDefaultAction line only when detection_only is false, so an entry
+    # that asked for detection-only mode is expected not to have it, and
+    # asserting it there would fail a correct run.
+    - name: "Rules | Verifying the blocking default action"
+      assert:
+        that:
+          - 'modsecurity_conf is search("^SecDefaultAction.*deny,status:403", multiline=True)'
+        fail_msg: >-
+          /etc/nginx/waf_rules/modsecurity.conf on {{ entry_name }} has no
+          SecDefaultAction denying with 403, so a rule match would be logged
+          and served
+        success_msg: >-
+          a rule match is answered with 403 on {{ entry_name }}
+      when: not (detection_only | bool)
+      changed_when: false
+
+    # Rules | Check the two files the rules phase does not download: one is
+    # copied out of the ModSecurity source tree and has to match the library
+    # version that was built, the other is the role's own entry point.
+    - name: "Rules | Checking the installed rule files"
+      stat:
+        path: "{{ item }}"
+      register: waf_rule_files
+      changed_when: false
+      loop:
+        - /etc/nginx/waf_rules/unicode.mapping
+        - /etc/nginx/waf_rules/main.conf
+
+    # Rules | Verify both landed. unicode.mapping missing means the rules
+    # phase ran after the build tree was already gone; main.conf missing
+    # means the role never got that far.
+    - name: "Rules | Verifying the rule files were installed"
+      assert:
+        that:
+          - (waf_rule_files.results | rejectattr('stat.exists') | list | length) == 0
+        fail_msg: >-
+          missing from /etc/nginx/waf_rules on {{ entry_name }}:
+          {{ waf_rule_files.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}
+        success_msg: >-
+          unicode.mapping and main.conf are installed on {{ entry_name }}
+      changed_when: false
+
+    # Cleanup | Verify the compiler and the version control client are gone
+    # again. The roles build from source on the target, and the post-install
+    # phase exists so a machine that only has to serve web traffic is not
+    # left holding the tools to build whatever comes next. This asserts the
+    # phase ran, and it reads the facts gathered at the top of the play.
+    - name: "Cleanup | Verifying the build toolchain was removed"
+      assert:
+        that:
+          - (build_toolchain_packages | select('in', ansible_facts['packages']) | list | length) == 0
+        fail_msg: >-
+          the build toolchain is still installed on {{ entry_name }}:
+          {{ build_toolchain_packages | select('in', ansible_facts['packages']) | join(', ') }}
+        success_msg: >-
+          gcc, make, automake and git were removed from {{ entry_name }}
+      changed_when: false
+
+    # Service | Restart nginx. This is the one task in the play that changes
+    # the host, and it is here because the mod_security role does not do it.
+    # That role defines a "Handler | Restarting nginx" handler and never
+    # notifies it, so when the role finishes, the nginx process still running
+    # is the one that started before the module existed. Without this restart
+    # the assertions below would describe a process that never read any of
+    # the configuration the roles wrote. The restart is the harness
+    # compensating for that gap, not part of what the roles promise, and it
+    # is the reason this play is not read-only.
+    - name: "Service | Restarting nginx so the running process reads the new configuration"
+      service:
+        name: nginx
+        state: restarted
+
+    # Service | Read the unit state back from systemd rather than trusting
+    # the restart's own return: a unit that starts and then exits reports a
+    # successful restart, and only the state afterwards tells them apart.
+    - name: "Service | Gathering the service facts"
+      service_facts:
+      changed_when: false
+
+    # Service | Verify nginx survived the restart. Taken together with the
+    # assertion below, this is what proves the module loads into a live
+    # process and not only into nginx -t.
+    - name: "Service | Verifying nginx is running"
+      assert:
+        that:
+          - ansible_facts['services']['nginx.service'] is defined
+          - ansible_facts['services']['nginx.service']['state'] == 'running'
+        fail_msg: >-
+          nginx is not running on {{ entry_name }} after the restart, so it
+          rejected the configuration the roles wrote
+        success_msg: >-
+          nginx is running on {{ entry_name }}
+      changed_when: false
+
+    # Service | Dump the configuration the running nginx resolved, includes
+    # and all. This is the end-to-end check on the include chain: the
+    # load_module line only appears here if nginx.conf's include reached the
+    # extras directory and the drop-in in it was read.
+    - name: "Service | Dumping the effective nginx configuration"
+      command: nginx -T
+      register: nginx_effective_config
+      changed_when: false
+
+    # Service | Verify the module is part of that resolved configuration.
+    - name: "Service | Verifying the connector module is loaded"
+      assert:
+        that:
+          - 'nginx_effective_config.stdout is search("load_module\s+\S*ngx_http_modsecurity_module\.so;")'
+        fail_msg: >-
+          the effective nginx configuration on {{ entry_name }} carries no
+          load_module for ngx_http_modsecurity_module.so, so the running
+          nginx does not have the module
+        success_msg: >-
+          the running nginx on {{ entry_name }} loads the ModSecurity module
+      changed_when: false

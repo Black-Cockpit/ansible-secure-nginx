@@ -1,14 +1,55 @@
 galaxy_info:
   author: Hasni Mehdi
   description: Nginx ModSecurity web application firewall installer
-  company: Black Cockpit
+  company: Black Cockpit LLC
   license: MIT
-  min_ansible_version: 2.1
+  min_ansible_version: "2.15.8"
 
+  # This list mirrors `supported_distribution` in defaults/main.yml, which the
+  # assert in tasks/common/pre_install.yml enforces before any work happens: a
+  # platform advertised here but missing there fails the run on the first task,
+  # and one supported there but missing here is working support nobody can
+  # discover. `EL` is the galaxy spelling of the `RedHat` entry in that list.
+  # ModSecurity is built from source, so both families are exercised: apt on
+  # Debian and Ubuntu, dnf plus the CRB/CodeReady repository on Enterprise
+  # Linux. Enterprise Linux starts at 8 because the dependency install goes
+  # through dnf. Only Ubuntu 24.04 and AlmaLinux 10 are exercised by CI; the
+  # remaining entries share their package manager and dependency names with
+  # those two.
   platforms:
   - name: Ubuntu
     versions:
-    - all
+    - jammy
+    - noble
+  - name: Debian
+    versions:
+    - bullseye
+    - bookworm
+  - name: EL
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: CentOS
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: Rocky
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: AlmaLinux
+    versions:
+    - "8"
+    - "9"
+    - "10"
+  - name: OracleLinux
+    versions:
+    - "8"
+    - "9"
+    - "10"
 
   galaxy_tags:
   - nginx_security

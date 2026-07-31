@@ -1,0 +1,38 @@
+# Build dependencies for the Debian family: Debian 11 and 12, Ubuntu 22.04 and
+# 24.04.
+#
+# This is the os_family fallback, reached when no Distribution-Major file
+# matches. One shared file is deliberate rather than lazy: every name below was
+# checked against the Debian and Ubuntu archives and resolves in all four
+# releases, so splitting them would produce four identical files. The moment one
+# release needs a different name, add packages/<Distribution>-<Major>.yml — for
+# example packages/Ubuntu-26.yml — and it wins over this file without anything
+# else changing.
+#
+# libpcre2-dev, not the PCRE1 headers: ModSecurity's configure.ac runs
+# PROG_PCRE2 unless --with-pcre is passed, and install_mod_security.yml calls
+# ./configure with no arguments. This list previously carried libpcre++-dev,
+# which was dropped from the archive and failed to resolve on Ubuntu 24.04.
+#
+# The list covers TWO source builds, not one. ModSecurity itself is the obvious
+# consumer, but install_mod_security_nginx_connector.yml also re-runs nginx's
+# own ./configure to build the connector as a dynamic module, so nginx's build
+# dependencies belong here too. zlib1g-dev is the one that comes from that
+# second build: nginx's default module set includes http_gzip, and its configure
+# aborts with "the HTTP gzip module requires the zlib library" without it.
+# Nothing in ModSecurity needs zlib, which is why it was missing.
+mod_security_build_packages:
+- apt-utils
+- autoconf
+- automake
+- build-essential
+- git
+- libcurl4-openssl-dev
+- libgeoip-dev
+- liblmdb-dev
+- libpcre2-dev
+- libtool
+- libxml2-dev
+- libyajl-dev
+- pkgconf
+- zlib1g-dev

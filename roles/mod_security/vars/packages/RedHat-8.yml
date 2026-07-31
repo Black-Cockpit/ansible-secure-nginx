@@ -1,0 +1,30 @@
+# Build dependencies for Enterprise Linux 8: RHEL, CentOS, Rocky, AlmaLinux and
+# Oracle Linux alike, all of which report os_family RedHat.
+#
+# EL 8 is the last release that carries geoip-devel. The legacy MaxMind GeoIP
+# databases were retired upstream and the package was dropped from EL 9, which
+# is why this file names it and RedHat-9.yml names libmaxminddb instead.
+#
+# The packages here all resolve from BaseOS, AppStream and EPEL, so this release
+# needs no CodeReady Builder / CRB enablement — the -devel packages that moved
+# behind that repository only did so from EL 9.
+mod_security_requires_crb: false
+
+# libinjection-devel comes from EPEL, which is why epel-release is installed as
+# its own task before this list is resolved.
+mod_security_build_packages:
+- "@Development Tools"
+- httpd-devel
+- pcre2
+- pcre2-devel
+- libxml2
+- libxml2-devel
+- curl
+- curl-devel
+- openssl
+- openssl-devel
+- git
+- yajl
+- libinjection-devel
+- geoip-devel
+- zlib-devel

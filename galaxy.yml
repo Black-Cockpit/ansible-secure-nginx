@@ -16,54 +16,85 @@ tags:
 - nginx_mod_security
 dependencies: {}
 repository: https://github.com/Black-Cockpit/ansible-secure-nginx
-documentation: https://github.com/Black-Cockpit/ansible-secure-nginx/blob/master/doc
+documentation: https://github.com/Black-Cockpit/ansible-secure-nginx/blob/master/README.md
 homepage: https://github.com/Black-Cockpit/ansible-secure-nginx
 issues: https://github.com/Black-Cockpit/ansible-secure-nginx/issues
+
+# The only exclusion list `ansible-galaxy collection build` reads. It does not
+# consult .gitignore or .build_ignore, so anything absent from here ships
+# inside the published artifact even when git never tracked it. Entries are
+# grouped by the reason they are excluded; patterns are matched against paths
+# relative to the collection root.
 build_ignore:
+# Version control and CI definitions. The publish workflow is repository
+# machinery and must not travel to consumers of the collection.
 - .git
+- .github
 - .gitignore
 - .build_ignore
+# Editor, IDE and swap-file state. Purely local to whoever built the artifact.
 - .vscode
-- .env
-- .venv
-- .vagrant
-- .pytest_cache
-- .tox
-- .cache
-- .coverage
-- .ropeproject
-- .ackrc
-- .python-version
-- .DS_Store
 - .idea
 - .project
 - .pydevproject
-- '*.tar.gz'
-- '*.pyc'
-- '*.pyo'
-- '*.retry'
-- '*.log'
-- '*.out'
-- '*.swp'
-- '*.swo'
+- .ropeproject
+- .ackrc
+- .DS_Store
 - '*.iml'
 - '*.sublime-project'
 - '*.sublime-workspace'
-- __pycache__
-- build.venv
+- '*.swp'
+- '*.swo'
+# Developer tooling and the integration harness. These reproduce the
+# repository, not the collection: the Vagrant matrix, its VM definitions and
+# its reports are large and inert once installed. `tests` already covers
+# `tests/integration`; both are listed so the intent survives a future
+# reshuffle of the test tree.
+- Makefile
+- 00_install_pipeline_dependencies.sh
+- requirements.txt
+- Vagrantfile
+- .vagrant
 - test
 - tests
+- tests/integration
 - molecule
+# Planning material. Local-only working documents, never collection content.
+- plans.local
+# Build output. Without `dist` a previously built tarball is packaged into the
+# next one, doubling the artifact on every release.
+- dist
+- '*.tar.gz'
+# Python environments, caches and compiled bytecode. `build.venv` holds the
+# collection build toolchain and `ops.venv` the pipeline dependencies
+# installed by 00_install_pipeline_dependencies.sh.
+- build.venv
+- ops.venv
+- .venv
 - venv
+- venv.bak
+- .env
 - env
 - ENV
 - env.bak
-- venv.bak
-- Vagrantfile
-- requirements.txt
-- credentials.yml
-- results.xml
+- .python-version
+- __pycache__
+- '*.pyc'
+- '*.pyo'
+- .tox
+- .cache
+# Run, test and coverage artifacts produced by a local execution.
+- .pytest_cache
+- .coverage
 - coverage.xml
+- results.xml
 - htmlcov
-- changelogs/.plugin-cache.yaml
 - .ansible-test-timeout.json
+- '*.retry'
+- '*.log'
+- '*.out'
+# Local credentials. Must never reach a published artifact under any
+# circumstance.
+- credentials.yml
+# Generated Ansible metadata caches, rebuilt on demand.
+- changelogs/.plugin-cache.yaml

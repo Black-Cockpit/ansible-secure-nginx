@@ -1,2 +1,6 @@
 ---
 # vars file for install
+#
+# Deliberately empty. Role vars outrank inventory group_vars and host_vars, so
+# anything placed here could not be overridden from inventory; the role's one
+# tunable, supported_distribution, is a role default instead.
