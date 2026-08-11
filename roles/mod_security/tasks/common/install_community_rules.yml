@@ -1,5 +1,5 @@
-# Phase five of the mod_security role: lays down the WAF rule configuration
-# under /etc/nginx/waf_rules and points the engine at it.
+# Phase five of the mod_security role: lays down the WAF engine
+# configuration under /etc/nginx/waf_rules and points the engine at it.
 #
 # Ordering: the unicode.mapping copy below reads out of
 # "{{ source_dir }}/modsecurity-v{{ module_version }}", the tree the install
@@ -9,11 +9,15 @@
 # whose previous run has already finished.
 #
 # What arms the engine is the SecRuleEngine rewrite: upstream's recommended
-# configuration ships "SecRuleEngine DetectionOnly", which inspects traffic and
-# logs but blocks nothing, and this file rewrites it to "On". Note that the
-# rewrite is unconditional — detection_only does not gate it. What
-# detection_only gates is the SecDefaultAction line at the end of this file,
-# which is what turns a rule match into a 403 rather than a log entry.
+# configuration ships "SecRuleEngine DetectionOnly", which inspects traffic
+# and logs but blocks nothing, and enforcement mode rewrites it to "On".
+# detection_only keeps the shipped default instead. The SecDefaultAction
+# line at the end of this file is gated twice — by detection_only, because
+# it is what turns a rule match into a 403, and by crs_enabled, because the
+# engine accepts one SecDefaultAction per phase across the include chain
+# and the CRS tuning file ships its own. The download runs with force on
+# every run, so the file always starts from the shipped default and a mode
+# flip converges on the next run.
 #
 # The engine is still not switched on for any traffic by this role: no
 # "modsecurity on;" directive is emitted into any nginx context. Everything
@@ -44,12 +48,14 @@
     recurse: true
 
 # Rules | Fetch upstream's recommended configuration, which is the base every
-# rewrite below edits. It is taken from the v3/master branch rather than from
-# the release matching module_version, so its contents can change under a host
-# without module_version moving.
+# rewrite below edits. It is pinned to the tag of the release the install
+# phase built, so the engine configuration on the host always matches the
+# built library and cannot change under a host between runs. The repository
+# lives under the owasp-modsecurity organisation; the historical SpiderLabs
+# address redirects there.
 - name: "Rules | Downloading the community rules"
   get_url:
-    url: "https://raw.githubusercontent.com/SpiderLabs/ModSecurity/v3/master/modsecurity.conf-recommended"
+    url: "https://raw.githubusercontent.com/owasp-modsecurity/ModSecurity/v{{ module_version }}/modsecurity.conf-recommended"
     dest: "/etc/nginx/waf_rules/modsecurity.conf"
     mode: "0660"
     owner: root
@@ -70,15 +76,19 @@
     group: root
     force: true
 
-# Rules | Arm the engine. The anchored regexp matches only upstream's shipped
-# default, so an operator who has since set the directive to anything else
-# keeps their value and the line is appended rather than replaced — which is
-# also why a re-run against an already-armed host is a no-op.
+# Rules | Arm the engine for enforcement. In detection_only mode the rewrite
+# is skipped and upstream's shipped "SecRuleEngine DetectionOnly" stands,
+# which evaluates and audits every rule while every request is served. The
+# anchored regexp matches only upstream's shipped default, so an operator who
+# has since set the directive to anything else keeps their value and the line
+# is appended rather than replaced — which is also why a re-run against an
+# already-armed host is a no-op.
 - name: "Rules | Enabling the ModSecurity engine"
   lineinfile:
     path: "/etc/nginx/waf_rules/modsecurity.conf"
     regexp: "^SecRuleEngine DetectionOnly$"
     line: "SecRuleEngine On"
+  when: not (detection_only | bool)
 
 # Rules | Repoint the audit log directory at the tree created above. The
 # optional leading hashes in the pattern mean this also matches the commented
@@ -99,26 +109,35 @@
     regexp: '[#]{0,}(SecAuditLog)\s.+$'
     replace: "SecAuditLog /var/log/mod_security/audit/modsec_audit.log"
 
-# Rules | Append the action a matching rule takes. This is what makes the WAF
-# block rather than observe: without it the armed engine evaluates every rule
-# and lets the request through. Skipped when detection_only is true, which is
-# the only thing that variable controls.
+# Rules | Append the action a rule without an explicit disruptive action
+# takes. Skipped when detection_only is true, and skipped when the Core Rule
+# Set is enabled: the engine accepts exactly one SecDefaultAction per phase
+# across the whole include chain, and the CRS tuning file loaded after this
+# one ships its own pass defaults for every phase, so a deny appended here
+# would fail the configuration parse. The embedded protocol-sanity rules
+# block either way, because each of them carries its own explicit deny, and
+# with CRS enabled the blocking of scored rules belongs to the anomaly
+# threshold evaluation rule.
 - name: "Rules | Updating the ModSecurity action response"
   lineinfile:
     state: present
     insertafter: EOF
     path: "/etc/nginx/waf_rules/modsecurity.conf"
     line: "SecDefaultAction \"phase:2,log,auditlog,deny,status:403,tag:'ATTACK_REJECTED'\""
-  when: not detection_only
+  when:
+  - not (detection_only | bool)
+  - not (crs_enabled | bool)
 
-# Rules | Install the role's own entry point, which includes the configuration
-# assembled above. Nothing in this role includes main.conf in turn — an
-# operator's site configuration points ModSecurity at this file.
-- name: "Rules | Copying the ModSecurity main configuration"
-  copy:
-    src: "./files/main.conf"
+# Rules | Render the role's own entry point, which includes the configuration
+# assembled above and, when crs_enabled is set, the Core Rule Set files the
+# CRS phase lays down. That phase runs after this one inside the same role
+# run, and nothing reads main.conf until the operator's own site
+# configuration points ModSecurity at it, so the ordering is safe. Nothing in
+# this role includes main.conf in turn.
+- name: "Rules | Rendering the ModSecurity main configuration"
+  template:
+    src: "templates/etc/nginx/waf_rules/main.conf.j2"
     dest: "/etc/nginx/waf_rules/main.conf"
     mode: "0660"
     owner: root
     group: root
-    force: true

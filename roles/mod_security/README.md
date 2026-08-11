@@ -4,13 +4,17 @@ Builds the [ModSecurity](https://github.com/owasp-modsecurity/ModSecurity)
 web application firewall and its NGINX connector from source on the
 target host, installs the resulting dynamic module into the modules
 directory the running NGINX was compiled to read, and writes a rule
-configuration under `/etc/nginx/waf_rules`.
+configuration under `/etc/nginx/waf_rules` — upstream's recommended
+engine configuration and, by default, the pinned
+[OWASP Core Rule Set](https://github.com/coreruleset/coreruleset)
+release on top of it.
 
-The role runs in six ordered phases, each consuming what the previous
-one left behind: preconditions and build tree, dependencies, the
-`libmodsecurity` build, the connector build, the rules, and the
-toolchain cleanup. None of them stands alone — the phases share facts
-and a build directory that only the first phase creates.
+The role runs in seven ordered phases, each consuming what the
+previous one left behind: preconditions and build tree, dependencies,
+the `libmodsecurity` build, the connector build, the engine
+configuration, the Core Rule Set, and the toolchain cleanup. None of
+them stands alone — the phases share facts and a build directory that
+only the first phase creates.
 
 It installs no NGINX of its own, on purpose. The connector is compiled
 against the source of the version already running on the host, and
@@ -73,9 +77,9 @@ dropped from EL 9.
   `ansible_facts['architecture']` and
   `ansible_facts['processor_nproc']`.
 - Outbound HTTPS from the target to `github.com` (the ModSecurity
-  release tarball and the connector repository),
-  `raw.githubusercontent.com` (the recommended configuration) and
-  `nginx.org` (the NGINX source tarball).
+  release tarball, the connector repository, and the Core Rule Set
+  release asset), `raw.githubusercontent.com` (the recommended
+  configuration) and `nginx.org` (the NGINX source tarball).
 - Roughly 2 GB free under `build_dir` and several minutes of CPU. The
   `libmodsecurity` compile is the longest step in the role by a wide
   margin, and `CFLAGS` is pinned to `-g -O0`, which keeps full debug
@@ -89,12 +93,17 @@ dropped from EL 9.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `build_dir` | `/tmp` | Parent of the build tree. The role creates `<build_dir>/modSecurity`, and deletes and recreates that subdirectory on every run. |
-| `module_version` | `3.0.16` | ModSecurity release to build. Interpolated into both the download URL and the unpacked directory name, so it has to match an upstream release tag exactly, without the leading `v`. |
-| `detection_only` | `false` | When `true`, no `SecDefaultAction` deny rule is appended, so a rule match is logged and the request is still served. |
+| `module_version` | `3.0.16` | ModSecurity release to build. Interpolated into both the download URL and the unpacked directory name, so it has to match an upstream release tag exactly, without the leading `v`. The recommended configuration is downloaded from the same tag. |
+| `detection_only` | `false` | When `true`, the engine keeps upstream's `SecRuleEngine DetectionOnly` and no `SecDefaultAction` deny rule is appended, so every rule is evaluated and audited while every request is served — the staging mode a rule set runs in before it blocks. |
+| `crs_enabled` | `true` | Whether the OWASP Core Rule Set is installed beside the engine configuration and included from the entry point. `false` restores the pre-3.0.0 layout, where `main.conf` includes the engine configuration alone. |
+| `crs_version` | `4.28.0` | Core Rule Set release to install, matching an upstream release tag without the leading `v`. Moves together with `crs_checksum`. |
+| `crs_checksum` | the pinned asset's SHA-256 | Checksum of the release asset `crs_version` names. Bumping the version without recording the new checksum fails the download, deliberately. |
+| `crs_paranoia_level` | `1` | Paranoia level the Core Rule Set runs at, from 1 to 4. Level 1 holds the high-confidence rules and is the production default; each level above 1 stacks stricter rule groups on the previous one and raises the false-positive rate with them — 2 suits applications handling sensitive data, 3 high-security deployments, and 4 accepts constant false positives for maximum strictness. |
 | `supported_distribution` | the seven names above | Distributions the platform assertion accepts. |
 | `target_platform` | `''` | Internal. Set to `rhel` or `debian` from the distribution fact before the dependency phase; not an operator setting. |
 
-`build_dir`, `module_version` and `detection_only` are declared in
+`build_dir`, `module_version`, `detection_only`, `crs_enabled`,
+`crs_version`, `crs_checksum` and `crs_paranoia_level` are declared in
 `vars/main.yml`, not in `defaults/`. Role vars outrank inventory, so
 setting any of them in `group_vars` or `host_vars` has no effect and
 fails silently. Override them as role parameters on the `roles:` entry,
@@ -111,14 +120,18 @@ Point `build_dir` at a normal directory on hosts with either policy.
 > default — anything the rules flag is answered with `403`, which can
 > break a working site on the first request. Run with
 > `detection_only: true` first, watch
-> `/var/log/mod_security/audit/modsec_audit.log`, and only then
+> `/var/log/mod_security/audit/modsec_audit.log`, write your
+> exclusions into the operator-owned exclusion files, and only then
 > enforce.
 
-`detection_only` is narrower than its name suggests. It gates one line:
-the `SecDefaultAction` appended at the end of `modsecurity.conf`. The
-engine itself is armed either way — the role rewrites upstream's
-`SecRuleEngine DetectionOnly` to `SecRuleEngine On` unconditionally, so
-rules are always evaluated and always logged.
+`detection_only` controls two things and nothing else: the engine
+directive and the deny default. In enforcement mode the role rewrites
+upstream's `SecRuleEngine DetectionOnly` to `SecRuleEngine On` and
+appends the `SecDefaultAction` that answers a match with `403`. In
+detection-only mode both are left out, so the shipped `DetectionOnly`
+stands: every rule is still evaluated and audited, and every request
+is served. The engine configuration is re-downloaded on every run, so
+flipping the mode converges on the next run.
 
 ## Usage
 
@@ -155,16 +168,30 @@ To build a different release, or to keep the build off `/tmp`:
 | `<modules path>/ngx_http_modsecurity_module.so` | The compiled connector. The directory is scraped from `nginx -V`, so it follows the packaging — `/usr/lib/nginx/modules` on the Debian family, `/usr/lib64/nginx/modules` on Enterprise Linux. |
 | `/etc/nginx/extras/mod-http-modsecurity.conf` | The `load_module` directive pointing at that module. |
 | `/etc/nginx/nginx.conf` | Gains `include /etc/nginx/extras/*.conf;`, inserted before the `events` block because `load_module` is only valid in the main context. |
-| `/etc/nginx/waf_rules/modsecurity.conf` | Upstream's recommended configuration, with `SecRuleEngine On`, the audit log paths rewritten, and — unless `detection_only` is `true` — a `SecDefaultAction` that answers a match with `403`. |
+| `/etc/nginx/waf_rules/modsecurity.conf` | Upstream's recommended configuration from the `module_version` tag, with the audit log paths rewritten and — in enforcement mode — `SecRuleEngine On`. A `SecDefaultAction` answering a match with `403` is appended only when the Core Rule Set is disabled: the engine accepts one default action per phase across the include chain, and with CRS enabled the tuning file owns them. In detection-only mode the shipped `DetectionOnly` stands and no deny is appended. |
 | `/etc/nginx/waf_rules/unicode.mapping` | The character mapping the transformation rules need, copied out of the built source tree so it matches the library version. |
-| `/etc/nginx/waf_rules/main.conf` | The role's entry point: one `Include` line pulling in `modsecurity.conf`. |
+| `/etc/nginx/waf_rules/crs-setup.conf` | The Core Rule Set tuning file, from upstream's example, written once and never overwritten, plus a managed block pinning the paranoia level. The example's own `pass` default actions arrive active and are the only ones in the whole chain. |
+| `/etc/nginx/waf_rules/rules/` | The pinned Core Rule Set release: the rule files and the data files they read. Wiped and reinstalled on every run, so a rule file the pinned release no longer ships cannot linger and load through the glob. |
+| `/etc/nginx/waf_rules/exclusions_before.conf` | Operator-owned runtime exclusions, loaded before the rules. Created empty, never overwritten. |
+| `/etc/nginx/waf_rules/exclusions_after.conf` | Operator-owned rule removals, loaded after the rules. Created empty, never overwritten. |
+| `/etc/nginx/waf_rules/main.conf` | The role's entry point, rendered from a template: the engine configuration, the tuning file, the before-rules exclusions, the rules glob and the after-rules exclusions in loading order — or the engine configuration alone when `crs_enabled` is `false`. |
 | `/var/log/mod_security/audit/` | The audit log tree, mode `0700` — recorded request bodies routinely contain credentials and session tokens. |
 | System library path | `libmodsecurity`, installed by `make install`, with the dynamic linker cache refreshed. |
 
-What lands in `modsecurity.conf` is upstream's recommended engine
-configuration. It is not an attack rule set: the
-[OWASP Core Rule Set](https://github.com/coreruleset/coreruleset) is
-not installed by this role, and adding it is a separate step.
+The engine configuration and the Core Rule Set protect against
+different things. The engine configuration embeds a handful of
+protocol-sanity rules that reject malformed requests — broken
+multipart bodies, unparseable payloads, oversized argument counts —
+each carrying its own explicit deny, so they block in enforcement mode
+whatever else is configured. The Core Rule Set carries the attack
+signatures that inspect well-formed requests for malicious content,
+and it blocks through anomaly scoring: matching rules accumulate a
+score, and one evaluation rule denies at the threshold. The `pass`
+default actions that select that model ship active in the tuning
+file, and they are the only default actions in the whole include
+chain — the engine accepts exactly one per phase, which is why the
+role appends its own deny to `modsecurity.conf` only when the Core
+Rule Set is disabled.
 
 ### Switching the WAF on
 
@@ -205,11 +232,14 @@ after the install role, on Ubuntu 24.04 and AlmaLinux 10. See the
 [integration test documentation](../../tests/integration/README.md) for
 the prerequisites.
 
-The assertions are structural: that the module was built and installed
-at the scraped path, that the `load_module` line and the include are in
-place, that `nginx -t` passes, that the rule files exist, and that the
-toolchain is gone. Nothing asserts that a request is blocked, because
-with no `modsecurity on;` anywhere on the host, none is.
+The assertions are structural first — the module built and installed
+at the scraped path, the `load_module` line and the include in place,
+`nginx -t` passing, the rule tree matching the mode and the pinned
+release, the toolchain gone — and functional last: the harness arms
+the WAF on a loopback virtual host it owns, serves a benign request,
+and asserts one canonical XSS payload is answered `403` in enforcement
+mode or served and audited in detection-only mode. The virtual host is
+the harness's, not the role's: the role still switches nothing on.
 
 ## Links
 

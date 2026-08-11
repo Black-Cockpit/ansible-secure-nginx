@@ -79,20 +79,26 @@ purpose, so the half-built machine can be inspected. Clean it up with
 
 ## The matrix
 
-| Entry | Box | Firmware |
-| --- | --- | --- |
-| `ubuntu2404` | `bento/ubuntu-24.04` | bios |
-| `alma10` | `almalinux/10` | efi (default) |
+| Entry | Box | Firmware | Mode | Paranoia level |
+| --- | --- | --- | --- | --- |
+| `ubuntu2404` | `bento/ubuntu-24.04` | bios | enforcement | 4 |
+| `alma10` | `almalinux/10` | efi (default) | enforcement | 4 |
 
 Both entries run with 4 GB of RAM and 4 CPUs, and both grow their root
-filesystem before the roles run. These two are what the collection is
-tested on. The roles accept a wider list of distributions — RHEL,
-CentOS, Rocky, Oracle Linux and Debian all pass the platform
-assertions — but nothing in this harness exercises them.
+filesystem before the roles run. Both run the WAF in enforcement mode —
+what production runs — at paranoia level 4, the strictest: the levels
+are cumulative, so the strict run evaluates every rule the lower levels
+carry, and a rule tree that runs clean at 4 runs clean at every level a
+deployment chooses. The detection-only branches of the verification
+stay supported through the `detection_only` field for hand runs. These
+two are what the collection is tested on. The roles accept a wider list
+of distributions — RHEL, CentOS, Rocky, Oracle Linux and Debian all
+pass the platform assertions — but nothing in this harness exercises
+them.
 
 ## What is asserted
 
-`playbooks/verify.yml` makes thirteen structural assertions, grouped:
+`playbooks/verify.yml` asserts, grouped:
 
 | Group | Assertion |
 | --- | --- |
@@ -102,19 +108,26 @@ assertions — but nothing in this harness exercises them.
 | Module | `/etc/nginx/extras/mod-http-modsecurity.conf` loads that module by that path |
 | Module | `/etc/nginx/nginx.conf` includes `/etc/nginx/extras/*.conf` above the `events` block |
 | Module | `nginx -t` exits 0 |
-| Rules | `/etc/nginx/waf_rules/modsecurity.conf` sets `SecRuleEngine On` |
+| Rules | `SecRuleEngine` is `On` in enforcement mode and `DetectionOnly` in detection-only mode |
 | Rules | `SecAuditLogStorageDir` points at `/var/log/mod_security/audit` |
-| Rules | a `SecDefaultAction` denies with 403 — skipped when the entry sets `detection_only: true` |
+| Rules | a `SecDefaultAction` denies with 403 when the entry runs enforcement without the Core Rule Set; with the Core Rule Set enabled, `modsecurity.conf` carries no default action at all, because the engine accepts one per phase across the include chain and the tuning file owns them |
 | Rules | `/etc/nginx/waf_rules/unicode.mapping` exists |
 | Rules | `/etc/nginx/waf_rules/main.conf` exists |
+| CRS | `crs-setup.conf` and both operator exclusion files exist |
+| CRS | the tuning file carries upstream's active `pass` default actions and the managed block pins the entry's paranoia level |
+| CRS | the rules tree is populated and carries `REQUEST-949-BLOCKING-EVALUATION.conf` |
+| CRS | `main.conf` includes the engine configuration, the tuning file, the exclusions and the rules in loading order — or the engine configuration alone when the entry disables the CRS phase |
 | Cleanup | `gcc`, `make`, `automake` and `git` are absent from the package facts |
 | Service | nginx restarts, stays running, and its effective configuration loads the module |
+| Probe | with the WAF armed on a harness-owned loopback listener, a benign request is served 200, and one canonical XSS payload is answered 403 in enforcement mode or served 200 and written to the audit log in detection-only mode |
 
-The `nginx -t` assertion is the load-bearing one. Everything before it
-proves files are in the right places; it is the only check that proves
-the running binary accepts the module those files describe. A
-connector compiled against a different nginx version, or compiled
-without `--with-compat`, fails exactly there and nowhere earlier.
+Two assertions carry the most weight. The `nginx -t` assertion in the
+Module group proves the running binary accepts the module — a
+connector compiled against a different nginx version, or without
+`--with-compat`, fails exactly there. The `nginx -t` re-run in the
+Probe group, with the probe virtual host loading the full rule entry
+point, proves the engine parses the whole rule tree — a malformed rule
+file or a duplicated rule id fails exactly there.
 
 The service group restarts nginx itself. That restart is the harness
 compensating for a gap in the `mod_security` role, which defines a
@@ -122,19 +135,18 @@ restart handler and never notifies it: without the restart, the
 process still running is the one that started before the module was
 installed.
 
-### Known gap: no functional WAF test
+### The functional probe
 
-There is no assertion that sends an attack payload and expects `403`,
-and that is deliberate. The `mod_security` role loads the module and
-writes the rule files, but never emits `modsecurity on;` or
-`modsecurity_rules_file` into an nginx `http`, `server` or `location`
-context, so the engine inspects no traffic on a correctly configured
-host. A functional assertion would fail against a run in which every
-role did exactly what it promises.
-
-The functional test belongs with the change that switches the WAF on,
-so that the assertion and the behaviour arrive together. Until then
-this harness asserts structure only.
+The roles never emit `modsecurity on;` or `modsecurity_rules_file`
+into an nginx `http`, `server` or `location` context — arming traffic
+is deliberately the operator's decision. The probe therefore plays the
+operator for the span of one request: it writes a virtual host on a
+loopback port with the engine armed against
+`/etc/nginx/waf_rules/main.conf`, reloads nginx, sends a benign
+request and one canonical XSS payload, asserts the outcome the entry's
+mode promises, and removes the virtual host again. A run with
+`crs_enabled: false` skips the probe entirely, because the engine
+configuration alone carries no attack signatures to trigger.
 
 ## Add a platform
 
@@ -159,8 +171,22 @@ Two fields decide how the machine boots and how much room it has:
 | `disk_size` | Present means "run `provision/grow_disk.sh` on this entry". The virtual disk is never resized — only the root partition inside a box that ships more disk than it partitions. |
 
 `detection_only` is optional and defaults to `false`. Setting it
-`true` on an entry runs `mod_security` in logging mode and drops the
-blocking-action assertion from the verification for that entry only.
+`true` on an entry runs `mod_security` in detection-only mode: the
+engine assertion expects `DetectionOnly` instead of `On`, the
+blocking-action assertion is dropped, and the probe expects the attack
+payload served and audited rather than answered with 403.
+
+`crs_enabled` is optional and defaults to `true`. Setting it `false`
+on an entry skips the Core Rule Set phase: the CRS assertions expect
+the single-include entry point, and the probe is dropped, because the
+engine configuration alone carries nothing for it to trigger.
+
+`crs_paranoia_level` is optional and defaults to `1`, the role
+default. The Core Rule Set runs and is verified at that level — the
+managed-overrides assertion checks the pinned value, and the probe's
+client sends ordinary browser headers so its anomaly score measures
+the payload rather than the client's shape, which scores points of its
+own at the higher levels.
 
 ## Layout
 

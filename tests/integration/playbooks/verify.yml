@@ -1,40 +1,47 @@
 # Verification: assert that the install and mod_security roles left the host
 # in the state they promise.
 #
-# The assertions are structural. They check that the packages are installed,
-# that the module the roles compiled is on disk and registered with nginx,
-# that the configuration nginx would load actually parses, that the rule set
-# is in place and armed, that the build toolchain is gone again, and that
-# nginx runs with the module. Every one of them is derived from something a
-# role does, so a failure names a role and not a guess about nginx.
+# The assertions are structural first and functional last. The structural
+# groups check that the packages are installed, that the module the roles
+# compiled is on disk and registered with nginx, that the configuration nginx
+# would load actually parses, that the engine configuration and the Core Rule
+# Set are in place in the mode the entry ran in, and that the build toolchain
+# is gone again. The probe group then arms the WAF on a harness-owned
+# loopback virtual host and sends one canonical attack payload through it,
+# because the roles themselves never emit "modsecurity on;" into any nginx
+# context — arming traffic is the operator's decision, so the harness plays
+# the operator for the span of one request. Every assertion is derived from
+# something a role does, so a failure names a role and not a guess about
+# nginx.
 #
-# What is deliberately not asserted: nothing here sends a request through the
-# WAF. That is not an oversight and not a shortcut. The mod_security role
-# loads the module and writes the rule files, but never emits
-# "modsecurity on;" into an nginx http, server or location context, so the
-# engine inspects no traffic on a host the roles have configured exactly as
-# designed. An "attack payload returns 403" assertion would therefore fail
-# against a correct run, and weakening it until it passed would assert
-# nothing. The gap is recorded in ../README.md and belongs with whatever
-# change switches the WAF on.
-#
-# Every task below is read-only and carries changed_when: false, with one
-# exception: the harness restarts nginx before the service assertions. The
-# comment on that task explains what it is compensating for.
+# The play is not read-only, in four places, each compensating for the same
+# recorded gap: the mod_security role defines restart and configuration-test
+# handlers and never notifies them. The harness restarts nginx before the
+# service assertions so the running process reads the configuration the
+# roles wrote, writes and removes the probe virtual host with its docroot,
+# and reloads nginx on both sides of the probe. Everything else carries
+# changed_when: false.
 #
 # Ordering that matters:
 #   * The modules path is scraped before the two assertions that use it.
 #   * The package facts are gathered once, at the top, and read again by the
-#     toolchain-removal assertion at the bottom. Nothing between the two
+#     toolchain-removal assertion further down. Nothing between the two
 #     touches a package, so one gather serves both.
 #   * The configuration test runs before the restart, so a broken
 #     configuration is reported as a broken configuration rather than as a
 #     service that would not come back up.
+#   * The probe runs last, after the service assertions proved nginx is
+#     running with the module, so a probe failure means the rule set and not
+#     the build.
 #
 # Expected extra-vars (supplied by run.sh from the platforms.yml entry):
 #   entry_name      matrix entry name, used in the assertion messages
 #   detection_only  the mode install.yml ran mod_security in, which decides
-#                   whether the blocking-action assertion applies
+#                   the expected engine directive, whether the blocking
+#                   default action exists, and whether the probe payload is
+#                   blocked or served and audited
+#   crs_enabled     whether the Core Rule Set phase ran, which gates the
+#                   rule-tree assertions and the probe
 - name: "Verify {{ entry_name }}"
   hosts: all
   become: true
@@ -44,6 +51,12 @@
     # setting as an extra-var, which outranks this; the value is here so the
     # play still runs when it is invoked by hand.
     detection_only: false
+    # Mirrors the mod_security role default, for the same reason.
+    crs_enabled: true
+    # Mirrors the mod_security role default, for the same reason. The
+    # managed-overrides assertion checks the level the tuning file pins
+    # against this value.
+    crs_paranoia_level: 1
     # The four packages the mod_security role's post-install phase removes by
     # name. It removes them whether or not it installed them, so their
     # absence is the whole of what that phase promises.
@@ -79,7 +92,7 @@
       changed_when: false
 
     # Installation | Populate ansible_facts['packages'] once, for the
-    # assertion below and for the toolchain-removal one at the end of the
+    # assertion below and for the toolchain-removal one further down the
     # play. Reading the package database asks a different question from
     # "nginx -v worked": it is what distinguishes a managed install from a
     # binary someone left on PATH.
@@ -228,11 +241,12 @@
       changed_when: false
       failed_when: false
 
-    # Module | The load-bearing assertion of this play. Everything above
-    # proves files are where they should be; this one proves the running
-    # binary accepts the module those files describe. A connector compiled
-    # against a different nginx version, or compiled without --with-compat,
-    # produces exactly this failure and nothing earlier catches it.
+    # Module | The load-bearing structural assertion of this play. Everything
+    # above proves files are where they should be; this one proves the
+    # running binary accepts the module those files describe. A connector
+    # compiled against a different nginx version, or compiled without
+    # --with-compat, produces exactly this failure and nothing earlier
+    # catches it.
     - name: "Module | Verifying the nginx configuration parses"
       assert:
         that:
@@ -244,9 +258,9 @@
           nginx accepts the configuration and the module on {{ entry_name }}
       changed_when: false
 
-    # Rules | Read the rule configuration the role downloads and rewrites.
-    # Three separate assertions read it, so it is decoded once below.
-    - name: "Rules | Reading the ModSecurity rule configuration"
+    # Rules | Read the engine configuration the role downloads and rewrites.
+    # Several assertions read it, so it is decoded once below.
+    - name: "Rules | Reading the ModSecurity engine configuration"
       slurp:
         src: "/etc/nginx/waf_rules/modsecurity.conf"
       register: modsecurity_rules
@@ -254,25 +268,42 @@
 
     # Rules | Decode the file once. Every assertion below matches against
     # this text.
-    - name: "Rules | Decoding the ModSecurity rule configuration"
+    - name: "Rules | Decoding the ModSecurity engine configuration"
       set_fact:
         modsecurity_conf: "{{ modsecurity_rules['content'] | b64decode }}"
       changed_when: false
 
-    # Rules | Verify the engine is armed. Upstream's recommended
-    # configuration ships "SecRuleEngine DetectionOnly", which evaluates
-    # rules and logs but never acts on them; the role rewrites that line, and
-    # this is the assertion that the rewrite matched. It is unconditional
-    # because the rewrite is unconditional — detection_only does not gate it.
-    - name: "Rules | Verifying the ModSecurity engine is enabled"
+    # Rules | Verify the engine is armed for enforcement. Upstream ships
+    # "SecRuleEngine DetectionOnly"; the role rewrites it to "On" only in
+    # enforcement mode, so the expectation follows the mode the entry ran in.
+    - name: "Rules | Verifying the ModSecurity engine is enforcing"
       assert:
         that:
           - 'modsecurity_conf is search("^SecRuleEngine\s+On", multiline=True)'
         fail_msg: >-
           /etc/nginx/waf_rules/modsecurity.conf on {{ entry_name }} does not
-          set SecRuleEngine On, so the rule set would be loaded and inert
+          set SecRuleEngine On, so the enforcement mode the entry asked for
+          was not armed
         success_msg: >-
-          the ModSecurity engine is armed on {{ entry_name }}
+          the ModSecurity engine is enforcing on {{ entry_name }}
+      when: not (detection_only | bool)
+      changed_when: false
+
+    # Rules | Verify the engine stayed in detection mode. The role keeps
+    # upstream's shipped default in this mode, and the download runs with
+    # force on every run, so an earlier enforcement run cannot leak an "On"
+    # into a detection-only entry.
+    - name: "Rules | Verifying the ModSecurity engine is detection only"
+      assert:
+        that:
+          - 'modsecurity_conf is search("^SecRuleEngine\s+DetectionOnly", multiline=True)'
+        fail_msg: >-
+          /etc/nginx/waf_rules/modsecurity.conf on {{ entry_name }} does not
+          keep SecRuleEngine DetectionOnly, so the detection-only mode the
+          entry asked for was not preserved
+        success_msg: >-
+          the ModSecurity engine is detection only on {{ entry_name }}
+      when: detection_only | bool
       changed_when: false
 
     # Rules | Verify the audit log was repointed at the directory the role
@@ -290,11 +321,11 @@
           the audit log directory is set on {{ entry_name }}
       changed_when: false
 
-    # Rules | Verify a rule match is answered with a 403. This is the one
-    # assertion the matrix can switch off: the role appends the
-    # SecDefaultAction line only when detection_only is false, so an entry
-    # that asked for detection-only mode is expected not to have it, and
-    # asserting it there would fail a correct run.
+    # Rules | Verify a rule match is answered with a 403. This assertion is
+    # switched twice, exactly like the task it verifies: the role appends the
+    # SecDefaultAction line only in enforcement mode with the Core Rule Set
+    # disabled, because the engine accepts one SecDefaultAction per phase
+    # across the include chain and the CRS tuning file ships its own.
     - name: "Rules | Verifying the blocking default action"
       assert:
         that:
@@ -305,7 +336,27 @@
           and served
         success_msg: >-
           a rule match is answered with 403 on {{ entry_name }}
-      when: not (detection_only | bool)
+      when:
+        - not (detection_only | bool)
+        - not (crs_enabled | bool)
+      changed_when: false
+
+    # Rules | Verify the engine configuration carries no default action when
+    # the Core Rule Set is enabled. A deny here would duplicate the phase the
+    # CRS tuning file sets and fail the configuration parse — the probe's
+    # nginx -t proves the parse, and this assertion names the cause before it.
+    - name: "Rules | Verifying no default action collides with the Core Rule Set"
+      assert:
+        that:
+          - 'modsecurity_conf is not search("^SecDefaultAction", multiline=True)'
+        fail_msg: >-
+          /etc/nginx/waf_rules/modsecurity.conf on {{ entry_name }} carries a
+          SecDefaultAction although the Core Rule Set is enabled, which
+          duplicates a phase the tuning file sets and fails the parse
+        success_msg: >-
+          the default actions are owned by the tuning file alone on
+          {{ entry_name }}
+      when: crs_enabled | bool
       changed_when: false
 
     # Rules | Check the two files the rules phase does not download: one is
@@ -319,7 +370,6 @@
       loop:
         - /etc/nginx/waf_rules/unicode.mapping
         - /etc/nginx/waf_rules/main.conf
-
     # Rules | Verify both landed. unicode.mapping missing means the rules
     # phase ran after the build tree was already gone; main.conf missing
     # means the role never got that far.
@@ -332,6 +382,155 @@
           {{ waf_rule_files.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}
         success_msg: >-
           unicode.mapping and main.conf are installed on {{ entry_name }}
+      changed_when: false
+
+    # Rules | Read the entry point, decoded once for the include assertions
+    # below. Its content depends on crs_enabled, so both branches read it.
+    - name: "Rules | Reading the ModSecurity entry point"
+      slurp:
+        src: "/etc/nginx/waf_rules/main.conf"
+      register: main_conf_file
+      changed_when: false
+
+    # Rules | Decode the entry point once.
+    - name: "Rules | Decoding the ModSecurity entry point"
+      set_fact:
+        main_conf_text: "{{ main_conf_file['content'] | b64decode }}"
+      changed_when: false
+
+    # CRS | Check the three files the Core Rule Set phase writes outside the
+    # rules directory: the tuning file and the two operator-owned exclusion
+    # files the entry point includes around the rules.
+    - name: "CRS | Checking the Core Rule Set companion files"
+      stat:
+        path: "/etc/nginx/waf_rules/{{ crs_companion_file }}"
+      register: crs_companion_files
+      changed_when: false
+      loop:
+        - crs-setup.conf
+        - exclusions_before.conf
+        - exclusions_after.conf
+      loop_control:
+        loop_var: crs_companion_file
+      when: crs_enabled | bool
+
+    # CRS | Verify the three companion files landed.
+    - name: "CRS | Verifying the Core Rule Set companion files were installed"
+      assert:
+        that:
+          - (crs_companion_files.results | rejectattr('stat.exists') | list | length) == 0
+        fail_msg: >-
+          missing from /etc/nginx/waf_rules on {{ entry_name }}:
+          {{ crs_companion_files.results | rejectattr('stat.exists') | map(attribute='crs_companion_file') | join(', ') }}
+        success_msg: >-
+          crs-setup.conf and both exclusion files are installed on
+          {{ entry_name }}
+      when: crs_enabled | bool
+      changed_when: false
+
+    # CRS | Read the tuning file for the managed-block assertion below.
+    - name: "CRS | Reading the Core Rule Set tuning file"
+      slurp:
+        src: "/etc/nginx/waf_rules/crs-setup.conf"
+      register: crs_setup_file
+      changed_when: false
+      when: crs_enabled | bool
+
+    # CRS | Verify the tuning file carries what the scoring model needs: the
+    # pass default actions upstream's example ships active — the engine
+    # accepts one SecDefaultAction per phase across the chain, so these are
+    # the only ones anywhere — and the managed block pinning the paranoia
+    # level the entry ran at.
+    - name: "CRS | Verifying the Core Rule Set managed overrides"
+      assert:
+        that:
+          - '(crs_setup_file["content"] | b64decode) is search("^SecDefaultAction \"phase:2,log,auditlog,pass\"", multiline=True)'
+          - '(crs_setup_file["content"] | b64decode) is search("BEGIN ANSIBLE MANAGED - CRS OVERRIDES")'
+          - '(crs_setup_file["content"] | b64decode) is search("setvar:tx\.blocking_paranoia_level=" ~ (crs_paranoia_level | string))'
+        fail_msg: >-
+          /etc/nginx/waf_rules/crs-setup.conf on {{ entry_name }} is missing
+          the pass default actions or the managed block pinning paranoia
+          level {{ crs_paranoia_level }}, so the anomaly-scoring model is
+          not configured as the entry asked
+        success_msg: >-
+          the pass default actions stand and paranoia level
+          {{ crs_paranoia_level }} is pinned on {{ entry_name }}
+      when: crs_enabled | bool
+      changed_when: false
+
+    # CRS | Count the installed rule and data files. The floor is deliberately
+    # far below the shipped count, so a minor upstream reshuffle does not
+    # fail the harness while an empty or half-copied tree still does.
+    - name: "CRS | Counting the installed Core Rule Set files"
+      find:
+        paths: /etc/nginx/waf_rules/rules
+        patterns: "*.conf,*.data"
+      register: crs_rule_tree
+      changed_when: false
+      when: crs_enabled | bool
+
+    # CRS | Look for the blocking evaluation rule file, which is the file
+    # that turns accumulated anomaly scores into a deny — the whole point of
+    # the scoring model the managed overrides select.
+    - name: "CRS | Checking the blocking evaluation rule file"
+      stat:
+        path: /etc/nginx/waf_rules/rules/REQUEST-949-BLOCKING-EVALUATION.conf
+      register: crs_blocking_evaluation_file
+      changed_when: false
+      when: crs_enabled | bool
+
+    # CRS | Verify the rule tree is populated and carries the blocking
+    # evaluation file.
+    - name: "CRS | Verifying the Core Rule Set rules were installed"
+      assert:
+        that:
+          - (crs_rule_tree.matched | default(0)) > 20
+          - crs_blocking_evaluation_file.stat.exists
+        fail_msg: >-
+          /etc/nginx/waf_rules/rules on {{ entry_name }} holds
+          {{ crs_rule_tree.matched | default(0) }} rule and data files and
+          the blocking evaluation file
+          {{ crs_blocking_evaluation_file.stat.exists | ternary('is', 'is not') }}
+          present, so the CRS phase did not install the pinned release
+        success_msg: >-
+          {{ crs_rule_tree.matched }} Core Rule Set files are installed on
+          {{ entry_name }}
+      when: crs_enabled | bool
+      changed_when: false
+
+    # CRS | Verify the entry point includes everything in loading order: the
+    # engine configuration, the tuning file, the before-rules exclusions, the
+    # rules glob, and the after-rules exclusions. Order is asserted rather
+    # than presence alone, because an exclusion file included on the wrong
+    # side of the rules silently stops excluding.
+    - name: "CRS | Verifying the entry point include order"
+      assert:
+        that:
+          - 'main_conf_text is search("(?s)modsecurity\.conf.*crs-setup\.conf.*exclusions_before\.conf.*rules/\*\.conf.*exclusions_after\.conf")'
+        fail_msg: >-
+          /etc/nginx/waf_rules/main.conf on {{ entry_name }} does not include
+          the engine configuration, the tuning file, the exclusions and the
+          rules in loading order
+        success_msg: >-
+          the entry point includes the Core Rule Set in loading order on
+          {{ entry_name }}
+      when: crs_enabled | bool
+      changed_when: false
+
+    # CRS | Verify the entry point fell back to the single include when the
+    # phase was disabled, which is the layout releases before 3.0.0 produced.
+    - name: "CRS | Verifying the entry point excludes the Core Rule Set"
+      assert:
+        that:
+          - 'main_conf_text is search("modsecurity\.conf")'
+          - 'main_conf_text is not search("crs-setup")'
+        fail_msg: >-
+          /etc/nginx/waf_rules/main.conf on {{ entry_name }} references the
+          Core Rule Set although the entry disabled the CRS phase
+        success_msg: >-
+          the entry point includes the engine configuration alone on
+          {{ entry_name }}
+      when: not (crs_enabled | bool)
       changed_when: false
 
     # Cleanup | Verify the compiler and the version control client are gone
@@ -350,15 +549,14 @@
           gcc, make, automake and git were removed from {{ entry_name }}
       changed_when: false
 
-    # Service | Restart nginx. This is the one task in the play that changes
-    # the host, and it is here because the mod_security role does not do it.
-    # That role defines a "Handler | Restarting nginx" handler and never
-    # notifies it, so when the role finishes, the nginx process still running
-    # is the one that started before the module existed. Without this restart
-    # the assertions below would describe a process that never read any of
-    # the configuration the roles wrote. The restart is the harness
-    # compensating for that gap, not part of what the roles promise, and it
-    # is the reason this play is not read-only.
+    # Service | Restart nginx. This changes the host, and it is here because
+    # the mod_security role does not do it. That role defines a "Handler |
+    # Restarting nginx" handler and never notifies it, so when the role
+    # finishes, the nginx process still running is the one that started
+    # before the module existed. Without this restart the assertions below
+    # would describe a process that never read any of the configuration the
+    # roles wrote. The restart is the harness compensating for that gap, not
+    # part of what the roles promise.
     - name: "Service | Restarting nginx so the running process reads the new configuration"
       service:
         name: nginx
@@ -407,3 +605,219 @@
         success_msg: >-
           the running nginx on {{ entry_name }} loads the ModSecurity module
       changed_when: false
+
+    # Probe | Create the docroot the probe virtual host serves. A "return"
+    # directive cannot stand in for a real docroot: nginx answers "return"
+    # during the rewrite phase, before the connector inspects the request, so
+    # a probe against it would report 200 whatever the rule set does.
+    - name: "Probe | Creating the probe docroot"
+      file:
+        path: /var/lib/harness-waf-test
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      when: crs_enabled | bool
+
+    # Probe | Write the page the benign request is served.
+    - name: "Probe | Writing the benign page"
+      copy:
+        dest: /var/lib/harness-waf-test/index.html
+        content: |
+          harness-waf-test
+        mode: "0644"
+        owner: root
+        group: root
+      when: crs_enabled | bool
+
+    # Probe | Write the harness-owned virtual host that switches the WAF on
+    # for this probe alone. The roles deliberately never emit
+    # "modsecurity on;" — arming traffic is the operator's decision — so the
+    # harness plays the operator for the span of one request: a loopback
+    # listener with the engine armed against the rule entry point the roles
+    # wrote. Both platforms include /etc/nginx/conf.d/*.conf from their
+    # shipped nginx.conf, which is what makes this drop-in reachable.
+    #
+    # The port is 8008 because it is in the SELinux http_port_t set. On
+    # Enterprise Linux the confined nginx may only bind ports carrying that
+    # label; an arbitrary port passes nginx -t, which parses without
+    # binding, and then fails bind() at the reload — and a master that
+    # cannot bind the new listener keeps serving the old configuration
+    # while systemd still reports the reload successful. The probe runs
+    # under the enforcing policy rather than weakening it, because the
+    # production platform enforces too.
+    - name: "Probe | Writing the probe virtual host"
+      copy:
+        dest: /etc/nginx/conf.d/harness-waf-test.conf
+        content: |
+          server {
+              listen 127.0.0.1:8008;
+              server_name harness-waf-test;
+              modsecurity on;
+              modsecurity_rules_file /etc/nginx/waf_rules/main.conf;
+              root /var/lib/harness-waf-test;
+          }
+        mode: "0644"
+        owner: root
+        group: root
+      when: crs_enabled | bool
+
+    # Probe | Ask nginx to parse the configuration with the probe virtual
+    # host in it. failed_when is disabled so the assertion below reports the
+    # failure with nginx's own diagnostic attached — a parse failure here is
+    # the rule set failing to load, not the probe.
+    - name: "Probe | Testing the configuration with the probe virtual host"
+      command: nginx -t
+      register: probe_config_test
+      changed_when: false
+      failed_when: false
+      when: crs_enabled | bool
+
+    # Probe | The load-bearing rule-set assertion. The structural checks
+    # above prove the files exist; this one proves the engine parses the
+    # whole rule tree — a malformed rule file, a duplicated id, or a missing
+    # include fails exactly here.
+    - name: "Probe | Verifying the rule tree parses"
+      assert:
+        that:
+          - probe_config_test.rc == 0
+        fail_msg: >-
+          nginx -t failed with the probe virtual host on {{ entry_name }},
+          so the engine rejects the rule tree the roles wrote:
+          {{ probe_config_test.stderr | trim }}
+        success_msg: >-
+          the engine parses the full rule tree on {{ entry_name }}
+      when: crs_enabled | bool
+      changed_when: false
+
+    # Probe | Load the probe virtual host into the running process. A reload
+    # is enough: the module was loaded by the restart above, and reload
+    # re-reads configuration.
+    - name: "Probe | Reloading nginx with the probe virtual host"
+      service:
+        name: nginx
+        state: reloaded
+      when: crs_enabled | bool
+
+    # Probe | Serve the benign request. This proves the armed listener
+    # serves ordinary traffic, so the block assertion below cannot pass by
+    # accident on a listener that answers everything with an error. The
+    # request carries ordinary browser headers, because the rule set scores
+    # the client's shape as well as its payload: a numeric Host header is
+    # worth three anomaly points at every level, a missing Accept header two
+    # more at level two and above, and together they reach the default
+    # blocking threshold — so a bare client would be blocked on a correct
+    # rule set and the assertion would blame the rules for the client. The
+    # request is retried because the service manager delivers the reload
+    # signal asynchronously: the reload task returns before the master has
+    # necessarily bound the new listener.
+    - name: "Probe | Sending the benign request"
+      uri:
+        url: "http://127.0.0.1:8008/"
+        status_code: 200
+        headers:
+          Host: "harness-waf-test"
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+          User-Agent: "Mozilla/5.0 (X11; Linux x86_64; harness-waf-test)"
+      register: probe_benign_result
+      retries: 5
+      delay: 2
+      until: probe_benign_result.status == 200
+      changed_when: false
+      when: crs_enabled | bool
+
+    # Probe | Send one canonical cross-site-scripting payload through the
+    # armed listener, from the same well-formed client as the benign
+    # request, so the anomaly score measures the payload alone. The
+    # libinjection XSS rule scores critical severity at every paranoia
+    # level, which meets the default blocking threshold on its own, so in
+    # enforcement mode the blocking evaluation rule answers 403. The status
+    # expectation is the assertion: uri fails the task on any other status.
+    - name: "Probe | Sending the attack payload against the enforcing engine"
+      uri:
+        url: "http://127.0.0.1:8008/?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+        status_code: 403
+        headers:
+          Host: "harness-waf-test"
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+          User-Agent: "Mozilla/5.0 (X11; Linux x86_64; harness-waf-test)"
+      register: probe_attack_result
+      retries: 5
+      delay: 2
+      until: probe_attack_result.status == 403
+      changed_when: false
+      when:
+        - crs_enabled | bool
+        - not (detection_only | bool)
+
+    # Probe | Send the same payload against the detection-only engine, which
+    # evaluates and audits every rule while serving the request.
+    - name: "Probe | Sending the attack payload against the detection-only engine"
+      uri:
+        url: "http://127.0.0.1:8008/?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+        status_code: 200
+        headers:
+          Host: "harness-waf-test"
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+          User-Agent: "Mozilla/5.0 (X11; Linux x86_64; harness-waf-test)"
+      register: probe_attack_detection_result
+      retries: 5
+      delay: 2
+      until: probe_attack_detection_result.status == 200
+      changed_when: false
+      when:
+        - crs_enabled | bool
+        - detection_only | bool
+
+    # Probe | Read the audit log for the payload's rule id. failed_when is
+    # disabled because grep exits non-zero on zero matches and on a missing
+    # file, and both of those are the assertion's business.
+    - name: "Probe | Reading the audit log for the payload"
+      shell:
+        cmd: grep -c 941100 /var/log/mod_security/audit/modsec_audit.log
+      register: probe_audit_hits
+      changed_when: false
+      failed_when: false
+      when:
+        - crs_enabled | bool
+        - detection_only | bool
+
+    # Probe | Verify the detection-only engine audited the payload it
+    # served. This is what separates detection mode from a dead engine: the
+    # request came back 200 either way, and only the audit trail tells them
+    # apart.
+    - name: "Probe | Verifying the payload was audited"
+      assert:
+        that:
+          - (probe_audit_hits.stdout | default('0') | int) > 0
+        fail_msg: >-
+          the XSS payload left no rule 941100 entry in the audit log on
+          {{ entry_name }}, so the detection-only engine did not evaluate it
+        success_msg: >-
+          the detection-only engine audited the payload on {{ entry_name }}
+      when:
+        - crs_enabled | bool
+        - detection_only | bool
+      changed_when: false
+
+    # Probe | Remove the probe virtual host and its docroot, so a kept VM is
+    # inspected in the state the roles produced rather than the state the
+    # probe added.
+    - name: "Probe | Removing the probe virtual host and docroot"
+      file:
+        path: "{{ probe_artifact }}"
+        state: absent
+      loop:
+        - /etc/nginx/conf.d/harness-waf-test.conf
+        - /var/lib/harness-waf-test
+      loop_control:
+        loop_var: probe_artifact
+      when: crs_enabled | bool
+
+    # Probe | Reload nginx without the probe virtual host, closing the
+    # loopback listener the probe opened.
+    - name: "Probe | Reloading nginx without the probe virtual host"
+      service:
+        name: nginx
+        state: reloaded
+      when: crs_enabled | bool

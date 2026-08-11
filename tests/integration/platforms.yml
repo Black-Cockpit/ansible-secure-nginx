@@ -19,9 +19,28 @@
 #                   partitions. The value records the size the box ships.
 #   detection_only  optional, default false. Forwarded to both playbooks so
 #                   the mod_security role runs in the mode verify.yml then
-#                   asserts against. true means the WAF logs but does not
-#                   answer a rule match with 403, which removes the
-#                   SecDefaultAction assertion from the verification.
+#                   asserts against. true keeps the engine in DetectionOnly
+#                   and leaves the deny default action out, so the engine
+#                   assertion expects DetectionOnly instead of On, the
+#                   blocking-action assertion is dropped, and the functional
+#                   probe expects the attack payload served and audited
+#                   rather than answered with 403. No default entry sets it:
+#                   the matrix tests what production runs, which is
+#                   enforcement, and the field exists for hand runs.
+#   crs_enabled     optional, default true. Forwarded to both playbooks so
+#                   the Core Rule Set phase runs and verify.yml asserts the
+#                   rule tree and sends the functional probe. false skips
+#                   the phase, expects the single-include entry point, and
+#                   drops the probe, which has nothing to block without the
+#                   rule set.
+#   crs_paranoia_level
+#                   optional, default 1 (the role default). Forwarded to
+#                   both playbooks so the Core Rule Set runs and is
+#                   verified at that level. Both entries pin level 4, the
+#                   strictest: the levels are cumulative, so the strict run
+#                   evaluates every rule the lower levels carry, and a rule
+#                   tree that runs clean at 4 runs clean at every level a
+#                   deployment chooses.
 #
 # Both entries ask for more memory and cores than an installer test normally
 # needs. The mod_security role compiles libmodsecurity and the nginx source
@@ -39,9 +58,11 @@ platforms:
     memory: 4096
     cpus: 4
     disk_size: 20GB
+    crs_paranoia_level: 4
 
   alma10:
     box: almalinux/10
     memory: 4096
     cpus: 4
     disk_size: 20GB
+    crs_paranoia_level: 4
