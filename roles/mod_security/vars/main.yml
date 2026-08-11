@@ -3,7 +3,7 @@
 # These are role vars, not role defaults, and the difference is visible to
 # operators: a value set here outranks the same name set in inventory
 # group_vars or host_vars, or in play vars, and silently wins. Overriding any
-# of the three below therefore has to be done either as a role parameter, on
+# of the seven below therefore has to be done either as a role parameter, on
 # the "roles:" entry that includes this role, or with an extra var on the
 # command line.
 
@@ -21,14 +21,49 @@ build_dir: "/tmp"
 
 # ModSecurity release to build. The value is interpolated into both the
 # download URL and the name of the directory the tarball unpacks into, so it
-# has to match an upstream release tag exactly, without the leading "v".
+# has to match an upstream release tag exactly, without the leading "v". The
+# rules phase downloads the recommended configuration from the same tag, so
+# the engine configuration on the host always matches the library that was
+# built.
 module_version: "3.0.16"
 
-# Whether the WAF observes or blocks. false, the default, appends a
-# SecDefaultAction that answers a rule match with 403; true leaves it out, so
-# matches are logged and the request is served.
-#
-# This does not control the rule engine itself: install_community_rules.yml
-# rewrites upstream's "SecRuleEngine DetectionOnly" to "On" either way, so
-# rules are always evaluated and always logged.
+# Whether the WAF observes or blocks. false, the default, arms the engine
+# with "SecRuleEngine On" and appends a SecDefaultAction that answers a rule
+# match with 403. true keeps upstream's shipped "SecRuleEngine DetectionOnly"
+# and leaves the deny action out, so every rule is still evaluated and
+# audited while every request is served — the staging mode a new rule set is
+# run in against real traffic before it is allowed to block.
 detection_only: false
+
+# Whether the OWASP Core Rule Set is installed beside the engine
+# configuration. true, the default, runs the CRS phase: it downloads the
+# release pinned below, lays the rules under /etc/nginx/waf_rules/rules,
+# writes the tuning file and the two operator-owned exclusion files, and the
+# rendered main.conf includes them all in loading order. false skips the
+# phase and main.conf includes the engine configuration alone, which is the
+# layout releases before 3.0.0 produced.
+crs_enabled: true
+
+# OWASP Core Rule Set release to install. The value is interpolated into the
+# download URL and into the name of the directory the tarball unpacks into,
+# so it has to match an upstream release tag exactly, without the leading
+# "v". The download is the "minimal" release asset, which carries exactly
+# what a deployment consumes: crs-setup.conf.example and the rules tree.
+crs_version: "4.28.0"
+
+# SHA-256 of the pinned release asset above, in the checksum format the
+# download task consumes. The two values move together: bumping crs_version
+# without recording the new asset's checksum fails the download on a
+# checksum mismatch, which is the intended failure mode for an unreviewed
+# upgrade.
+crs_checksum: "sha256:fca67fe46adafeeee61b9d1a03f38c25b9b2a799577df03fa51d99589e6d03b9"
+
+# Paranoia level the Core Rule Set runs at, from 1 to 4. Level 1 holds the
+# high-confidence rules and is the production default. Every level above 1
+# stacks stricter rule groups on top of the previous one and raises the
+# false-positive rate with them: 2 suits applications handling sensitive
+# data, 3 high-security deployments, and 4 accepts constant false positives
+# for maximum strictness. The level is written into the tuning file as the
+# blocking paranoia level, so raising it takes effect on the next run
+# without touching any rule file.
+crs_paranoia_level: 1

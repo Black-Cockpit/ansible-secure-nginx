@@ -1,6 +1,6 @@
-# Entry point of the mod_security role: six phases that compile ModSecurity and
-# its nginx connector from source on the target host and wire the result into
-# the running nginx.
+# Entry point of the mod_security role: seven phases that compile ModSecurity
+# and its nginx connector from source on the target host and wire the result
+# into the running nginx.
 #
 # The phases are ordered, and each one consumes what the previous one left
 # behind:
@@ -13,9 +13,12 @@
 #   3. Install       builds and installs libmodsecurity into the build tree.
 #   4. Connector     builds the nginx module against the running nginx version
 #                    and sets nginx_modules_path.
-#   5. Rules         installs the rule set, reading unicode.mapping back out of
-#                    the build tree phase three populated.
-#   6. Post Install  removes the toolchain phase two installed.
+#   5. Rules         installs the engine configuration, reading
+#                    unicode.mapping back out of the build tree phase three
+#                    populated, and renders the main.conf entry point.
+#   6. CRS           installs the OWASP Core Rule Set the entry point
+#                    includes. Gated on crs_enabled.
+#   7. Post Install  removes the toolchain phase two installed.
 #
 # The include path in phase two interpolates target_platform, which is not a
 # value an operator supplies: pre_install.yml derives it from the distribution
@@ -24,7 +27,7 @@
 # has run, and the role default is an empty string so that failure is loud
 # rather than a silently wrong platform.
 #
-# Phases three to five all write into source_dir and read each other's output
+# Phases three to six all write into source_dir and read each other's output
 # there, so none of them stands alone against a host that has not been through
 # phase one in the same play.
 
@@ -55,12 +58,23 @@
   include_tasks:
     file: "common/install_mod_security_nginx_connector.yml"
 
-# Rules | Install the recommended rule configuration. It copies
-# unicode.mapping out of the ModSecurity source tree, so it has to run while
-# that tree still exists.
+# Rules | Install the recommended engine configuration and render the entry
+# point. It copies unicode.mapping out of the ModSecurity source tree, so it
+# has to run while that tree still exists.
 - name: "Rules | Installing the ModSecurity community rules"
   include_tasks:
     file: "common/install_community_rules.yml"
+
+# CRS | Install the OWASP Core Rule Set on top of the engine configuration
+# the rules phase laid down. The gate lives here rather than on every task
+# inside the file. The phase downloads a pinned release tarball with get_url
+# and needs nothing from the toolchain, so it stands independent of the
+# cleanup that follows; it writes into source_dir, which is why it still
+# belongs inside the same play as phase one.
+- name: "CRS | Installing the OWASP Core Rule Set"
+  include_tasks:
+    file: "common/install_crs_rules.yml"
+  when: crs_enabled | bool
 
 # Post Install | Drop the compiler toolchain now that nothing else needs it.
 # Runs last because every phase above depends on it.

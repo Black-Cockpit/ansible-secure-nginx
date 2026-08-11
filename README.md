@@ -5,7 +5,10 @@ Ansible collection that installs NGINX and builds the
 application firewall against it. It ships two roles — one that puts
 NGINX on the host, and one that compiles `libmodsecurity` and the NGINX
 connector from source, installs the resulting dynamic module, and
-writes a rule configuration under `/etc/nginx/waf_rules`.
+writes a rule configuration under `/etc/nginx/waf_rules`: upstream's
+recommended engine configuration and, by default, the pinned
+[OWASP Core Rule Set](https://github.com/coreruleset/coreruleset)
+release on top of it.
 
 The two roles are meant to run in that order. `mod_security` compiles
 its connector against the NGINX already on the host and refuses to run
@@ -120,8 +123,9 @@ anyway, review the audit log, and only then flip it to `false`:
         detection_only: true
 ```
 
-`detection_only`, `module_version` and `build_dir` are declared in the
-role's `vars/main.yml`, which outranks inventory. Set them as role
+`detection_only`, `module_version`, `build_dir`, `crs_enabled`,
+`crs_version`, `crs_checksum` and `crs_paranoia_level` are declared in
+the role's `vars/main.yml`, which outranks inventory. Set them as role
 parameters as above, or on the command line — the same names in
 `group_vars` or `host_vars` are silently ignored:
 
@@ -150,11 +154,17 @@ Two things the collection does not finish, and that you have to:
   process keeps serving without the module until it is restarted by
   hand or by whatever runs after the role.
 
-The collection also installs no attack rule set. What lands in
-`/etc/nginx/waf_rules/modsecurity.conf` is upstream's recommended
-engine configuration, not the
-[OWASP Core Rule Set](https://github.com/coreruleset/coreruleset);
-adding the CRS is a separate step on top of this collection.
+The rule tree carries two layers that protect against different
+things. `/etc/nginx/waf_rules/modsecurity.conf` is upstream's
+recommended engine configuration, whose embedded protocol-sanity rules
+reject malformed requests. With `crs_enabled` — the default — the
+pinned [OWASP Core Rule Set](https://github.com/coreruleset/coreruleset)
+release lands beside it: the attack signatures that inspect well-formed
+requests, blocking through anomaly scoring at the paranoia level pinned
+by `crs_paranoia_level`, with two operator-owned exclusion files that
+survive every run. `main.conf` includes it all in loading order.
+`crs_enabled: false` restores the pre-3.0.0 layout, where `main.conf`
+includes the engine configuration alone.
 
 ## Testing
 
@@ -164,11 +174,14 @@ no unit tests: the collection ships no Python plugins, so there is
 nothing for them to exercise. See the
 [tests documentation](tests/README.md).
 
-The matrix covers Ubuntu 24.04 and AlmaLinux 10 and nothing else, and
-its assertions are structural — that the module was built, installed
-and loaded, that the rule files are on disk, and that `nginx -t` still
-passes. No test asserts that the firewall blocks a request, because
-after the roles run it does not.
+The matrix covers Ubuntu 24.04 and AlmaLinux 10 and nothing else. Its
+assertions are structural — the module built, installed and loaded,
+the rule tree on disk in the mode the entry ran in, `nginx -t` passing
+— and end with a functional probe: the harness arms the WAF on a
+loopback virtual host it owns and asserts one canonical attack payload
+is blocked in enforcement mode, or served and audited in detection-only
+mode. The roles themselves still switch nothing on; the probe plays
+the operator for one request.
 
 ## Links
 

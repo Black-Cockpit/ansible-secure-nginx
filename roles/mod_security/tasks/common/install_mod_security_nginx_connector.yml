@@ -178,14 +178,19 @@
 # nginx's main context — the part of nginx.conf above events — and nginx
 # rejects the directive outright anywhere else. Anchoring on the first
 # top-level block rather than appending is what keeps the include in that
-# context. state: present makes the line idempotent, so a re-run does not stack
-# duplicate includes.
+# context.
+#
+# The line is a single line matched by regexp, and that is load-bearing: an
+# earlier release wrote a multi-line value here, whose presence check can
+# never match a file line, so every role run stacked another include — and
+# the second load_module fails the whole configuration parse with "module is
+# already loaded". A host provisioned by that release keeps its harmless
+# orphaned "# Nginx extra modules" comment line; this task neither needs nor
+# touches it.
 - name: "Connector | Updating the nginx configuration"
   lineinfile:
     path: "/etc/nginx/nginx.conf"
-    line: |
-      # Nginx extra modules
-      include /etc/nginx/extras/*.conf;
-
+    regexp: '^[\s]*include[\s]+/etc/nginx/extras/\*\.conf;'
+    line: "include /etc/nginx/extras/*.conf;"
     insertbefore: '[\s]{0,}events[\s]{0,}[\{]'
     state: present

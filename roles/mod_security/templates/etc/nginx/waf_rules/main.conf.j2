@@ -1,0 +1,14 @@
+# ModSecurity entry point, rendered by the mod_security role. The include
+# order is load-bearing: the engine configuration carries the deny default
+# action for the protocol-sanity rules it embeds, the tuning file resets the
+# default action to pass for everything after it, the before-rules exclusion
+# file has to precede the rules it modifies at runtime, the rules glob loads
+# the numbered Core Rule Set files in their designed alphabetical order, and
+# the after-rules exclusion file removes rules that are already loaded.
+Include "/etc/nginx/waf_rules/modsecurity.conf"
+{% if crs_enabled | bool %}
+Include "/etc/nginx/waf_rules/crs-setup.conf"
+Include "/etc/nginx/waf_rules/exclusions_before.conf"
+Include "/etc/nginx/waf_rules/rules/*.conf"
+Include "/etc/nginx/waf_rules/exclusions_after.conf"
+{% endif %}

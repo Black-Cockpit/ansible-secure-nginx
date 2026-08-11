@@ -1,0 +1,150 @@
+# Phase six of the mod_security role: installs the OWASP Core Rule Set
+# beside the engine configuration the rules phase laid down, together with
+# the tuning file and the two operator-owned exclusion files the rendered
+# entry point includes around it. main.yml gates the whole phase on
+# crs_enabled, so nothing in this file re-checks it.
+#
+# The download is the "minimal" release asset, which carries exactly what a
+# deployment consumes — crs-setup.conf.example and the rules tree — and it
+# is pinned by crs_version and verified against crs_checksum, so what lands
+# on a host is reviewable and cannot change under it between runs. The
+# tarball is fetched with get_url rather than cloned, because the post
+# install phase removes git unconditionally and this phase must not depend
+# on anything that phase takes away.
+#
+# The engine accepts exactly one SecDefaultAction per phase across the
+# whole include chain — a second one for a phase already set fails the
+# configuration parse outright. The tuning file installed below ships
+# upstream's "pass" defaults for every phase already active, which is what
+# routes blocking through the anomaly-scoring model: rules accumulate a
+# score and one evaluation rule denies at the threshold. This phase
+# therefore adds no default action of its own, and the rules phase skips
+# its deny append when the Core Rule Set is enabled for the same reason.
+# The embedded protocol-sanity rules keep blocking either way, because
+# each of them carries its own explicit deny.
+#
+# Ownership is split deliberately. The rules directory and the managed
+# block converge on the pinned release on every run. The tuning file base
+# and the two exclusion files are written once and never overwritten: they
+# are the operator's false-positive surface, and an exclusion tuned on the
+# host has to survive the next run.
+
+# CRS | Fetch the pinned minimal release asset into the build tree. The
+# checksum makes the download fail loudly when the asset does not match the
+# pinned release, which is the intended failure mode for an unreviewed
+# upgrade.
+- name: "CRS | Downloading the OWASP Core Rule Set"
+  get_url:
+    url: "https://github.com/coreruleset/coreruleset/releases/download/v{{ crs_version }}/coreruleset-{{ crs_version }}-minimal.tar.gz"
+    dest: "{{ source_dir }}"
+    checksum: "{{ crs_checksum }}"
+    force: yes
+
+# CRS | Unpack the tarball in place. The directory it creates embeds
+# crs_version, which is why the variable appears in the copy paths below
+# rather than being resolved once.
+- name: "CRS | Extracting the OWASP Core Rule Set"
+  unarchive:
+    src: "{{ source_dir }}/coreruleset-{{ crs_version }}-minimal.tar.gz"
+    dest: "{{ source_dir }}"
+    remote_src: yes
+
+# CRS | Destroy whatever an earlier run left in the rules directory. The
+# entry point loads the directory through a glob, so a rule file the pinned
+# release no longer ships would otherwise linger beside its replacement and
+# load with it — and a duplicated rule id fails the configuration parse.
+- name: "CRS | Deleting the Core Rule Set rules directory"
+  file:
+    path: "/etc/nginx/waf_rules/rules"
+    state: absent
+    force: yes
+
+# CRS | Recreate the empty rules directory the rule files are copied into.
+- name: "CRS | Creating the Core Rule Set rules directory"
+  file:
+    path: "/etc/nginx/waf_rules/rules"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+# CRS | Install the rule files and the data files they read. The two travel
+# together because every .data file is referenced by a relative path from
+# the rule file beside it. The tree is flat apart from upstream's two
+# .conf.example exclusion templates, which the entry point's *.conf glob
+# never loads, so applying the file mode to every copied entry is safe.
+- name: "CRS | Installing the Core Rule Set rules"
+  copy:
+    src: "{{ source_dir }}/coreruleset-{{ crs_version }}/rules/"
+    dest: "/etc/nginx/waf_rules/rules/"
+    remote_src: yes
+    mode: "0660"
+    owner: root
+    group: root
+    force: true
+
+# CRS | Install the tuning file from upstream's example, once. force is off
+# because the file is the operator's tuning surface beyond the managed
+# block below: anomaly thresholds and rule-group toggles written into it on
+# the host survive later runs, and a version bump refreshes the base only
+# after the operator deletes the file.
+- name: "CRS | Installing the Core Rule Set tuning file"
+  copy:
+    src: "{{ source_dir }}/coreruleset-{{ crs_version }}/crs-setup.conf.example"
+    dest: "/etc/nginx/waf_rules/crs-setup.conf"
+    remote_src: yes
+    mode: "0660"
+    owner: root
+    group: root
+    force: no
+
+# CRS | Write the managed overrides at the end of the tuning file. The
+# block carries the paranoia level alone: the pass default actions the
+# scoring model needs are already active in the example installed above,
+# and the engine rejects a second SecDefaultAction for a phase already
+# set, so adding any here fails the configuration parse. The SecAction
+# deliberately carries the canonical rule id 900000: an operator who later
+# uncomments upstream's own example of that rule collides on a duplicated
+# id and the configuration parse fails loudly, instead of two copies of
+# the setting racing silently.
+- name: "CRS | Writing the Core Rule Set managed overrides"
+  blockinfile:
+    path: "/etc/nginx/waf_rules/crs-setup.conf"
+    marker: "# {mark} ANSIBLE MANAGED - CRS OVERRIDES"
+    block: |
+      SecAction "id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level={{ crs_paranoia_level }}"
+
+# CRS | Create the exclusion file loaded before the rules, once. Runtime
+# exclusions — ctl actions that remove a rule for one matching request
+# shape — have to run ahead of the rules they modify, which is why the
+# entry point includes this file between the tuning file and the rules.
+# force is off: the content belongs to the operator.
+- name: "CRS | Creating the before-rules exclusion file"
+  copy:
+    dest: "/etc/nginx/waf_rules/exclusions_before.conf"
+    content: |
+      # Operator-owned ModSecurity exclusions, loaded before the Core Rule Set.
+      # Runtime exclusions (SecRule ... "ctl:ruleRemoveById=...") belong here.
+      # The mod_security role creates this file empty and never overwrites it,
+      # so exclusions written here survive every later role run.
+    mode: "0660"
+    owner: root
+    group: root
+    force: no
+
+# CRS | Create the exclusion file loaded after the rules, once. Unconditional
+# removals — SecRuleRemoveById and SecRuleRemoveByTag — only act on rules
+# that are already loaded, which is why the entry point includes this file
+# after the rules glob. force is off: the content belongs to the operator.
+- name: "CRS | Creating the after-rules exclusion file"
+  copy:
+    dest: "/etc/nginx/waf_rules/exclusions_after.conf"
+    content: |
+      # Operator-owned ModSecurity exclusions, loaded after the Core Rule Set.
+      # Unconditional removals (SecRuleRemoveById, SecRuleRemoveByTag) belong
+      # here. The mod_security role creates this file empty and never
+      # overwrites it, so exclusions written here survive every later role run.
+    mode: "0660"
+    owner: root
+    group: root
+    force: no

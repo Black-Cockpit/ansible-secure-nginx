@@ -20,9 +20,11 @@ code that does not exist.
 ## Integration tests
 
 The harness boots a throwaway VirtualBox machine, runs the `install`
-role and then the `mod_security` role against it over SSH, and asserts
+role and then the `mod_security` role against it over SSH, asserts
 that the packages, the compiled module, the nginx configuration and
-the rule set are all where the roles promise to leave them. It
+the rule set are all where the roles promise to leave them, and then
+proves the rule set works: it arms the WAF on a harness-owned loopback
+virtual host and sends one canonical attack payload through it. It
 finishes by destroying the machine.
 
 The set of machines to test is a matrix — each entry pins a box, its
@@ -41,13 +43,16 @@ Expect 10 to 20 minutes per entry: the `mod_security` role compiles
 libmodsecurity and the nginx source on the guest, and that is nearly
 all of the wall clock.
 
-> **The WAF is not exercised end to end.** The assertions are
-> structural. The `mod_security` role loads the module and writes the
-> rule files but never switches the engine on for any nginx context,
-> so a test that sent an attack payload and expected `403` would fail
-> against a correct run. See
-> [known gap](integration/README.md#known-gap-no-functional-waf-test)
-> for why it is deferred rather than weakened.
+> **The WAF is exercised through a harness-owned virtual host.** The
+> `mod_security` role loads the module and writes the rule files but
+> never switches the engine on for any nginx context, so the harness
+> arms it itself on a loopback listener for the span of the probe: a
+> benign request is served, one canonical XSS payload is answered
+> `403` in enforcement mode or served and audited in detection-only
+> mode, and the listener is removed again. See
+> [the functional probe](integration/README.md#the-functional-probe)
+> for how it compensates for what the roles deliberately leave to the
+> operator.
 
 See the [integration test documentation](integration/README.md) for
 the prerequisites (including the VirtualBox/KVM VT-x note), the full

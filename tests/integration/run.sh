@@ -51,7 +51,7 @@ entry_field() {
 # extra-vars. Returns the ansible-playbook exit code.
 run_playbook() {
     local entry_name="$1" playbook="$2"
-    local detection_only
+    local detection_only crs_enabled crs_paranoia_level
 
     # Which mode the WAF is configured in. mod_security keeps detection_only
     # in vars/ rather than defaults/, and role vars outrank inventory and play
@@ -59,13 +59,28 @@ run_playbook() {
     detection_only="$(entry_field "$entry_name" detection_only)"
     [ "$detection_only" = "null" ] && detection_only="false"
 
+    # Whether the Core Rule Set phase runs. Same precedence story as
+    # detection_only: the variable lives in the role's vars/, so an extra-var
+    # is the only place a run can set it from, and verify.yml gates its Core
+    # Rule Set assertions and the functional probe on the same value.
+    crs_enabled="$(entry_field "$entry_name" crs_enabled)"
+    [ "$crs_enabled" = "null" ] && crs_enabled="true"
+
+    # The paranoia level the Core Rule Set runs and is verified at. Same
+    # precedence story again; the fallback mirrors the role default so the
+    # managed-overrides assertion in verify.yml always knows the expected
+    # value.
+    crs_paranoia_level="$(entry_field "$entry_name" crs_paranoia_level)"
+    [ "$crs_paranoia_level" = "null" ] && crs_paranoia_level="1"
+
     # Capture the SSH parameters Vagrant generated for this VM
     vagrant ssh-config "$entry_name" > "$reports_dir/$entry_name.ssh_config" 2>/dev/null
 
-    # detection_only is passed as a JSON object extra-var, not in the bare
-    # "key=value" form: that form makes every value a string, and the string
-    # "false" is truthy, so the role's "when: not detection_only" would skip
-    # the very task the verification then asserts is present.
+    # detection_only and crs_enabled are passed as JSON object extra-vars,
+    # not in the bare "key=value" form: that form makes every value a string,
+    # and the string "false" is truthy, so the role's "when: not
+    # detection_only" would skip the very task the verification then asserts
+    # is present.
     #
     # The mod_security role scrapes nginx -V through a shell task that uses
     # "&>" to discard output. That is a bashism: dash, which is /bin/sh on
@@ -77,7 +92,8 @@ run_playbook() {
         --inventory "$entry_name," \
         --extra-vars "entry_name=$entry_name" \
         --extra-vars "{\"detection_only\": $detection_only}" \
-        --extra-vars "ansible_shell_executable=/bin/bash" \
+        --extra-vars "{\"crs_enabled\": $crs_enabled}" \
+        --extra-vars "{\"crs_paranoia_level\": $crs_paranoia_level}" \
         --ssh-common-args "-F $reports_dir/$entry_name.ssh_config" \
         --user vagrant \
         "playbooks/$playbook"
