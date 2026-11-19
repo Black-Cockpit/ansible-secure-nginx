@@ -25,7 +25,7 @@ build_dir: "/tmp"
 # rules phase downloads the recommended configuration from the same tag, so
 # the engine configuration on the host always matches the library that was
 # built.
-module_version: "3.0.16"
+module_version: "3.0.17"
 
 # Whether the WAF observes or blocks. false, the default, arms the engine
 # with "SecRuleEngine On" and appends a SecDefaultAction that answers a rule
@@ -49,14 +49,14 @@ crs_enabled: true
 # so it has to match an upstream release tag exactly, without the leading
 # "v". The download is the "minimal" release asset, which carries exactly
 # what a deployment consumes: crs-setup.conf.example and the rules tree.
-crs_version: "4.28.0"
+crs_version: "4.30.0"
 
 # SHA-256 of the pinned release asset above, in the checksum format the
 # download task consumes. The two values move together: bumping crs_version
 # without recording the new asset's checksum fails the download on a
 # checksum mismatch, which is the intended failure mode for an unreviewed
 # upgrade.
-crs_checksum: "sha256:fca67fe46adafeeee61b9d1a03f38c25b9b2a799577df03fa51d99589e6d03b9"
+crs_checksum: "sha256:3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427"
 
 # Paranoia level the Core Rule Set runs at, from 1 to 4. Level 1 holds the
 # high-confidence rules and is the production default. Every level above 1

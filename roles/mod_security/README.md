@@ -93,10 +93,10 @@ dropped from EL 9.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `build_dir` | `/tmp` | Parent of the build tree. The role creates `<build_dir>/modSecurity`, and deletes and recreates that subdirectory on every run. |
-| `module_version` | `3.0.16` | ModSecurity release to build. Interpolated into both the download URL and the unpacked directory name, so it has to match an upstream release tag exactly, without the leading `v`. The recommended configuration is downloaded from the same tag. |
+| `module_version` | `3.0.17` | ModSecurity release to build. Interpolated into both the download URL and the unpacked directory name, so it has to match an upstream release tag exactly, without the leading `v`. The recommended configuration is downloaded from the same tag. |
 | `detection_only` | `false` | When `true`, the engine keeps upstream's `SecRuleEngine DetectionOnly` and no `SecDefaultAction` deny rule is appended, so every rule is evaluated and audited while every request is served — the staging mode a rule set runs in before it blocks. |
 | `crs_enabled` | `true` | Whether the OWASP Core Rule Set is installed beside the engine configuration and included from the entry point. `false` restores the pre-3.0.0 layout, where `main.conf` includes the engine configuration alone. |
-| `crs_version` | `4.28.0` | Core Rule Set release to install, matching an upstream release tag without the leading `v`. Moves together with `crs_checksum`. |
+| `crs_version` | `4.30.0` | Core Rule Set release to install, matching an upstream release tag without the leading `v`. Moves together with `crs_checksum`. |
 | `crs_checksum` | the pinned asset's SHA-256 | Checksum of the release asset `crs_version` names. Bumping the version without recording the new checksum fails the download, deliberately. |
 | `crs_paranoia_level` | `1` | Paranoia level the Core Rule Set runs at, from 1 to 4. Level 1 holds the high-confidence rules and is the production default; each level above 1 stacks stricter rule groups on the previous one and raises the false-positive rate with them — 2 suits applications handling sensitive data, 3 high-security deployments, and 4 accepts constant false positives for maximum strictness. |
 | `supported_distribution` | the seven names above | Distributions the platform assertion accepts. |
@@ -135,7 +135,7 @@ flipping the mode converges on the next run.
 
 ## Usage
 
-The example below builds ModSecurity `3.0.16` against the NGINX the
+The example below builds ModSecurity `3.0.17` against the NGINX the
 install role put on the host, in logging-only mode:
 
 ```yaml
@@ -157,7 +157,7 @@ To build a different release, or to keep the build off `/tmp`:
   - name: hasnimehdi91.secure_nginx.mod_security
     vars:
       build_dir: /var/tmp
-      module_version: "3.0.16"
+      module_version: "3.0.17"
       detection_only: false
 ```
 
