@@ -1,6 +1,6 @@
 namespace: hasnimehdi91
 name: secure_nginx
-version: 3.0.0
+version: 3.1.0
 readme: README.md
 authors:
 - Hasni Mehdi hasnimehdi@outlook.com
