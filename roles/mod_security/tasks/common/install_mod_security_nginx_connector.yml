@@ -192,5 +192,5 @@
     path: "/etc/nginx/nginx.conf"
     regexp: '^[\s]*include[\s]+/etc/nginx/extras/\*\.conf;'
     line: "include /etc/nginx/extras/*.conf;"
-    insertbefore: '[\s]{0,}events[\s]{0,}[\{]'
+    insertbefore: '^\s*events\s*\{'
     state: present
